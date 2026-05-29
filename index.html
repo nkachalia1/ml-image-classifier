@@ -363,6 +363,13 @@
                                             <span>Pixel Grid</span>
                                         </div>
                                     </label>
+                                    <label class="radio-tile">
+                                        <input type="radio" name="xray-filter" value="gradcam">
+                                        <div class="tile-content">
+                                            <i class="fa-solid fa-fire-flame-curved"></i>
+                                            <span>Grad-CAM</span>
+                                        </div>
+                                    </label>
                                 </div>
                             </div>
 
@@ -379,6 +386,33 @@
                                 <div class="tensor-shape">
                                     <span class="label">Normalization Range</span>
                                     <span class="value">[-1.0, 1.0]</span>
+                                </div>
+                            </div>
+                            
+                            <!-- Grad-CAM Dynamic Explanation Card -->
+                            <div class="xray-explain-card hidden" id="xray-explain-card">
+                                <div class="explain-header">
+                                    <i class="fa-solid fa-fire-flame-curved explain-icon"></i>
+                                    <h3>Grad-CAM Decision Map</h3>
+                                </div>
+                                <div class="explain-body">
+                                    <p class="explain-intro">Grad-CAM (Gradient-weighted Class Activation Mapping) uses gradients flowing back into the final convolutional layer of MobileNet to map spatial influences.</p>
+                                    <div class="explain-metric">
+                                        <span class="label">Target Explanation:</span>
+                                        <span class="value text-glow-magenta" id="xray-explain-target">Awaiting Active Pred</span>
+                                    </div>
+                                    <div class="explain-metric">
+                                        <span class="label">Feature Map Layer:</span>
+                                        <span class="value text-glow-cyan">conv_pw_13_relu</span>
+                                    </div>
+                                    <div class="explain-details">
+                                        <span class="details-title">Decision Influence Legend:</span>
+                                        <ul class="explain-list">
+                                            <li><span class="color-indicator glow-hot"></span> <strong>Orange / Red / White</strong>: Strong positive driver.</li>
+                                            <li><span class="color-indicator glow-violet"></span> <strong>Magenta / Violet</strong>: Mild baseline influence.</li>
+                                            <li><span class="color-indicator transparent"></span> <strong>Dark / Transparent</strong>: Ignored / Negligible background.</li>
+                                        </ul>
+                                    </div>
                                 </div>
                             </div>
                         </div>

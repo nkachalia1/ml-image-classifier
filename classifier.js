@@ -9,6 +9,9 @@ const ClassifierEngine = {
     // Models
     mobileNetModel: null,
     knnClassifierInstance: null,
+    gradCAMModel: null,
+    gradCAMSubModel: null,
+    gradCAMLayerName: null,
     
     // Status
     isLoaded: false,
@@ -47,6 +50,9 @@ const ClassifierEngine = {
                 version: 1,
                 alpha: 1.0
             });
+            
+            // Initialize Grad-CAM sub-models
+            this.initGradCAM();
             
             this.isLoaded = true;
             console.log('[NeuralSight] MobileNet v1 model loaded successfully.');
@@ -425,6 +431,141 @@ const ClassifierEngine = {
             numBytes: memoryInfo.numBytes,
             numMegabytes: (memoryInfo.numBytes / (1024 * 1024)).toFixed(2)
         };
+    },
+
+    /**
+     * Initializes the Grad-CAM sub-models
+     */
+    initGradCAM() {
+        if (!this.mobileNetModel || !this.mobileNetModel.model) {
+            console.warn('[NeuralSight] Cannot initialize Grad-CAM: MobileNet not loaded.');
+            return;
+        }
+        
+        try {
+            const model = this.mobileNetModel.model;
+            const layerName = 'conv_pw_13_relu'; // standard MobileNet v1 final conv activation layer
+            const convLayer = model.getLayer(layerName);
+            
+            if (convLayer) {
+                this.gradCAMLayerName = layerName;
+                
+                // Get all layers coming AFTER 'conv_pw_13_relu'
+                const layersAfter = [];
+                let found = false;
+                for (const layer of model.layers) {
+                    if (found) {
+                        layersAfter.push(layer);
+                    }
+                    if (layer.name === layerName) {
+                        found = true;
+                    }
+                }
+                
+                // Create a sub-model starting from the output of the convolutional layer
+                const convShape = convLayer.output.shape.slice(1);
+                const symbolicInput = tf.input({ shape: convShape });
+                let current = symbolicInput;
+                for (const layer of layersAfter) {
+                    current = layer.apply(current);
+                }
+                
+                this.gradCAMSubModel = tf.model({ inputs: symbolicInput, outputs: current });
+                
+                // Also create a model that outputs the conv layer activations directly from input image
+                this.gradCAMModel = tf.model({ inputs: model.inputs, outputs: convLayer.output });
+                
+                console.log(`[NeuralSight] Grad-CAM initialized with layer: ${layerName}`);
+            } else {
+                console.error('[NeuralSight] Grad-CAM Layer not found:', layerName);
+            }
+        } catch (error) {
+            console.error('[NeuralSight] Failed to initialize Grad-CAM:', error);
+        }
+    },
+
+    /**
+     * Extracts the class index of the highest probability prediction
+     * @param {HTMLImageElement|HTMLVideoElement|HTMLCanvasElement} element 
+     */
+    async getTopClassIndex(element) {
+        if (!this.mobileNetModel || !this.mobileNetModel.model) {
+            throw new Error('MobileNet model is not loaded');
+        }
+        
+        const preprocessedCanvas = this.preprocessToCanvas(element);
+        
+        return tf.tidy(() => {
+            const tensor = tf.browser.fromPixels(preprocessedCanvas);
+            const normalized = tensor.toFloat().sub(tf.scalar(127.5)).div(tf.scalar(127.5));
+            const inputTensor = normalized.expandDims(0);
+            const logits = this.mobileNetModel.model.predict(inputTensor);
+            const topIndexTensor = logits.argMax(1);
+            return topIndexTensor.dataSync()[0];
+        });
+    },
+
+    /**
+     * Computes the Grad-CAM heatmap values for the target class index
+     * @param {HTMLImageElement|HTMLVideoElement|HTMLCanvasElement} element 
+     * @param {number} targetClassIndex 
+     * @returns {Promise<Float32Array>} 224x224 heatmap matrix normalized to [0, 1]
+     */
+    async computeGradCAM(element, targetClassIndex) {
+        if (!this.gradCAMModel || !this.gradCAMSubModel) {
+            this.initGradCAM();
+        }
+        
+        if (!this.gradCAMModel || !this.gradCAMSubModel) {
+            throw new Error('Grad-CAM models are not initialized');
+        }
+        
+        const preprocessedCanvas = this.preprocessToCanvas(element);
+        
+        return tf.tidy(() => {
+            const tensor = tf.browser.fromPixels(preprocessedCanvas);
+            const normalized = tensor.toFloat().sub(tf.scalar(127.5)).div(tf.scalar(127.5));
+            const inputTensor = normalized.expandDims(0); // [1, 224, 224, 3]
+            
+            // 1. Get the intermediate feature activations
+            const convActVal = this.gradCAMModel.predict(inputTensor); // [1, 7, 7, 1024]
+            
+            // 2. Define the score function w.r.t the intermediate activations
+            const scoreFn = (convAct) => {
+                const preds = this.gradCAMSubModel.predict(convAct); // [1, 1000]
+                return preds.slice([0, targetClassIndex], [1, 1]).asScalar();
+            };
+            
+            // 3. Compute gradients of score w.r.t feature activations
+            const gradFn = tf.grad(scoreFn);
+            const grads = gradFn(convActVal); // [1, 7, 7, 1024]
+            
+            // 4. Global Average Pooling over spatial dimensions (height & width)
+            const weights = tf.mean(grads, [1, 2]); // [1, 1024]
+            const weightsReshaped = weights.expandDims(1); // [1, 1, 1024]
+            
+            // 5. Multiply the activations by their importance weights and sum across channels
+            const weightedSum = tf.mul(convActVal, weightsReshaped);
+            const heatmap = tf.sum(weightedSum, 3).squeeze(); // [7, 7]
+            
+            // 6. Apply ReLU to keep only features that positively influence the prediction
+            const reluHeatmap = tf.relu(heatmap);
+            
+            // 7. Normalize the heatmap values between 0 and 1
+            const maxVal = reluHeatmap.max();
+            const minVal = reluHeatmap.min();
+            const denom = maxVal.sub(minVal).add(tf.scalar(1e-8));
+            const normalizedHeatmap = reluHeatmap.sub(minVal).div(denom);
+            
+            // 8. Resize bilinear back to [224, 224] for overlay alignment
+            const resizedHeatmap = tf.image.resizeBilinear(
+                normalizedHeatmap.expandDims(-1).expandDims(0),
+                [224, 224]
+            ); // [1, 224, 224, 1]
+            
+            // Get Float32Array values
+            return resizedHeatmap.squeeze().dataSync();
+        });
     }
 };
 

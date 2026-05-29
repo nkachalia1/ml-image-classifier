@@ -1612,3 +1612,138 @@ input:disabled + .slider {
     background: hsla(187, 92%, 53%, 0.04);
 }
 
+/* ==========================================================================
+   GRAD-CAM EXPLANATION PANEL & LEGEND (style.css Additions)
+   ========================================================================== */
+.xray-explain-card {
+    background: hsla(220, 35%, 8%, 0.5);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    padding: 16px;
+    margin-top: 20px;
+    box-shadow: inset 0 0 15px rgba(263, 90, 65, 0.05);
+    animation: slide-up var(--transition-normal);
+    transition: opacity var(--transition-normal);
+}
+
+.xray-explain-card.hidden {
+    display: none !important;
+}
+
+@keyframes slide-up {
+    from { transform: translateY(10px); opacity: 0; }
+    to { transform: translateY(0); opacity: 1; }
+}
+
+.explain-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 12px;
+    border-bottom: 1px solid var(--color-border);
+    padding-bottom: 8px;
+}
+
+.explain-icon {
+    font-size: 16px;
+    color: var(--color-magenta);
+    text-shadow: 0 0 8px var(--color-magenta-glow);
+}
+
+.explain-header h3 {
+    font-size: 14px;
+    font-weight: 700;
+    font-family: var(--font-sans);
+    color: var(--color-text-primary);
+    letter-spacing: -0.2px;
+}
+
+.explain-intro {
+    font-size: 11px;
+    color: var(--color-text-muted);
+    margin-bottom: 14px;
+    line-height: 1.4;
+}
+
+.explain-metric {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 12px;
+    font-family: var(--font-mono);
+    padding: 6px 0;
+    border-bottom: 1px dashed var(--color-border);
+}
+
+.explain-metric:last-of-type {
+    border-bottom: none;
+    margin-bottom: 12px;
+}
+
+.explain-metric .label {
+    color: var(--color-text-secondary);
+}
+
+.explain-metric .value {
+    font-weight: 700;
+}
+
+.explain-details {
+    background: hsla(220, 30%, 4%, 0.4);
+    border-radius: var(--radius-sm);
+    padding: 10px;
+    border: 1px solid var(--color-border);
+}
+
+.details-title {
+    display: block;
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: var(--color-text-muted);
+    margin-bottom: 8px;
+}
+
+.explain-list {
+    list-style: none;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.explain-list li {
+    font-size: 11px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--color-text-secondary);
+}
+
+.explain-list li strong {
+    color: var(--color-text-primary);
+}
+
+.color-indicator {
+    width: 12px;
+    height: 12px;
+    border-radius: 3px;
+    display: inline-block;
+    flex-shrink: 0;
+}
+
+.color-indicator.glow-hot {
+    background: linear-gradient(135deg, hsl(45, 95%, 50%), hsl(354, 85%, 55%));
+    box-shadow: 0 0 8px hsla(354, 85%, 55%, 0.6);
+}
+
+.color-indicator.glow-violet {
+    background: linear-gradient(135deg, hsl(322, 85%, 55%), hsl(263, 90%, 65%));
+    box-shadow: 0 0 8px hsla(263, 90%, 65%, 0.5);
+}
+
+.color-indicator.transparent {
+    border: 1px solid var(--color-border);
+    background: hsla(220, 30%, 15%, 0.4);
+}
+

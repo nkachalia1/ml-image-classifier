@@ -30,6 +30,13 @@ const UIManager = {
     
     // Image element for upload/preset sources
     activeImageElement: null,
+    
+    // Grad-CAM Visualization States
+    currentGradCAM: null,
+    isComputingGradCAM: false,
+    lastGradCAMTime: 0,
+    lastGradCAMTargetClass: -1,
+    lastGradCAMTargetLabel: '',
 
     /**
      * Bind all DOM events, tab actions and configurations
@@ -377,6 +384,7 @@ const UIManager = {
     },
 
     resetPredictionOutput() {
+        this.currentGradCAM = null;
         document.getElementById('top-pred-label').textContent = 'Awaiting Input...';
         document.getElementById('top-pred-pct').textContent = '0%';
         document.getElementById('top-pred-bar').style.width = '0%';
@@ -729,6 +737,11 @@ const UIManager = {
         this.drawHistogram(data);
         
         // 4. Apply image preprocessor matrix filters
+        if (filterType !== 'gradcam') {
+            const explainCard = document.getElementById('xray-explain-card');
+            if (explainCard) explainCard.classList.add('hidden');
+        }
+        
         if (filterType === 'grayscale') {
             for (let i = 0; i < data.length; i += 4) {
                 const r = data[i];
@@ -806,7 +819,131 @@ const UIManager = {
                 ctx.lineTo(224, y);
             }
             ctx.stroke();
+        } else if (filterType === 'gradcam') {
+            // 1. Show the dynamic explanation card
+            const explainCard = document.getElementById('xray-explain-card');
+            if (explainCard) explainCard.classList.remove('hidden');
+            
+            // 2. Check if we need to launch a new async Grad-CAM computation in background
+            if (sourceElement && !this.isComputingGradCAM && (performance.now() - this.lastGradCAMTime > 180)) {
+                this.isComputingGradCAM = true;
+                
+                (async () => {
+                    try {
+                        // Get top predicted class index and standard label/prob
+                        const topClassIndex = await ClassifierEngine.getTopClassIndex(sourceElement);
+                        
+                        // We also get standard predictions to display a clean classification name
+                        const predictions = await ClassifierEngine.predictStandard(sourceElement);
+                        const topPred = predictions[0];
+                        const displayLabel = topPred ? `${topPred.className} (${Math.round(topPred.probability * 100)}%)` : 'Unknown Prediction';
+                        
+                        // Compute Grad-CAM heatmap array [224 * 224]
+                        const heatmap = await ClassifierEngine.computeGradCAM(sourceElement, topClassIndex);
+                        
+                        // Save states to UIManager
+                        this.currentGradCAM = heatmap;
+                        this.lastGradCAMTargetClass = topClassIndex;
+                        this.lastGradCAMTargetLabel = displayLabel;
+                        this.lastGradCAMTime = performance.now();
+                        
+                        // Update explanation text
+                        const targetLabelElement = document.getElementById('xray-explain-target');
+                        if (targetLabelElement) {
+                            targetLabelElement.textContent = displayLabel;
+                        }
+                    } catch (err) {
+                        console.error('[NeuralSight] Grad-CAM background run failed:', err);
+                    } finally {
+                        this.isComputingGradCAM = false;
+                    }
+                })();
+            }
+            
+            // 3. Draw original image frame, then apply the alpha blended overlay
+            if (this.currentGradCAM) {
+                const heatmap = this.currentGradCAM;
+                for (let i = 0; i < data.length; i += 4) {
+                    const pixelIdx = i / 4;
+                    const val = heatmap[pixelIdx];
+                    
+                    const glow = this.getGlowColor(val);
+                    const alpha = glow.a;
+                    
+                    // Alpha blending formula: new = (1 - alpha) * original + alpha * glow
+                    data[i] = Math.round((1 - alpha) * data[i] + alpha * glow.r);
+                    data[i+1] = Math.round((1 - alpha) * data[i+1] + alpha * glow.g);
+                    data[i+2] = Math.round((1 - alpha) * data[i+2] + alpha * glow.b);
+                }
+                ctx.putImageData(imgData, 0, 0);
+                
+                // 4. Draw high-tech HUD overlay on the canvas
+                ctx.fillStyle = 'rgba(7, 10, 19, 0.75)';
+                ctx.fillRect(8, 8, 208, 24);
+                ctx.strokeStyle = 'hsla(187, 92%, 53%, 0.4)';
+                ctx.lineWidth = 1;
+                ctx.strokeRect(8, 8, 208, 24);
+                
+                ctx.fillStyle = '#ffffff';
+                ctx.font = '700 8px "JetBrains Mono"';
+                
+                const targetText = this.lastGradCAMTargetLabel ? `TARGET: ${this.lastGradCAMTargetLabel.toUpperCase()}` : 'COMPUTING HEATMAP...';
+                ctx.fillText(targetText, 14, 23);
+            } else {
+                // Show a loading text and a scanner sweep animation on original frame
+                ctx.fillStyle = 'rgba(7, 10, 19, 0.7)';
+                ctx.fillRect(0, 0, 224, 224);
+                
+                ctx.fillStyle = 'var(--color-cyan)';
+                ctx.font = '700 10px "JetBrains Mono"';
+                ctx.fillText('SCANNING DECISION MAP...', 40, 116);
+                
+                // Tech scanner line
+                const scanY = Math.round((performance.now() / 4) % 224);
+                ctx.fillStyle = 'hsla(187, 92%, 53%, 0.4)';
+                ctx.fillRect(0, scanY, 224, 2);
+            }
         }
+    },
+
+    /**
+     * Maps a normalized value in [0, 1] to a gorgeous neon heatmap color
+     * Palette: Dark Violet ➔ Neon Magenta ➔ Hot Orange ➔ Glowing Yellow/White
+     * @param {number} value 
+     */
+    getGlowColor(value) {
+        let r, g, b, a;
+        
+        if (value < 0.2) {
+            // Dark violet/transparent baseline
+            r = Math.round(value * 5 * 80);
+            g = 0;
+            b = Math.round(value * 5 * 120 + 40);
+            a = value * 0.45; // very low opacity for background pixels
+        } else if (value < 0.5) {
+            // Purple to rich Magenta
+            const t = (value - 0.2) / 0.3;
+            r = Math.round(80 + t * 175);
+            g = 0;
+            b = Math.round(160 - t * 40);
+            a = 0.45 + t * 0.25; // ramp up opacity
+        } else if (value < 0.8) {
+            // Magenta to Neon Orange
+            const t = (value - 0.5) / 0.3;
+            r = 255;
+            g = Math.round(t * 120);
+            b = Math.round(120 - t * 120);
+            a = 0.7 + t * 0.15;
+        } else {
+            // Neon Orange to Glowing Yellow/White
+            const t = (value - 0.8) / 0.2;
+            r = 255;
+            g = Math.round(120 + t * 135);
+            b = Math.round(t * 220);
+            a = 0.85 + t * 0.15; // full glowing opacity
+        }
+        
+        return { r, g, b, a };
     },
 
     drawHistogram(pixelData) {
