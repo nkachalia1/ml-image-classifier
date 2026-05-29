@@ -1458,7 +1458,14 @@ const UIManager = {
             }
         } catch (err) {
             console.error('[NeuralSight] Multimodal AI captioning failed:', err);
-            this.updateCaptionOutput(`<span style="color: var(--color-red); font-size: 11px;">Error: ${err.message || 'Generation failed. Try Cloud API mode.'}</span>`);
+            let errMsg = err.message || 'Generation failed.';
+            
+            // Check if this is a standard fetch TypeError caused by browser CORS blocking unauthenticated Hugging Face requests
+            if (this.captionMode === 'cloud' && !this.hfApiToken && (err.name === 'TypeError' || errMsg.toLowerCase().includes('fetch') || errMsg.toLowerCase().includes('networkerror'))) {
+                errMsg = 'Unauthenticated browser requests are restricted by Hugging Face (CORS). Please click the Key icon below and save a valid Hugging Face API Token, or switch to "Local AI (ViT-GPT2)" to run completely offline in your browser.';
+            }
+            
+            this.updateCaptionOutput(`<span style="color: var(--color-red); font-size: 12px; line-height: 1.45; display: block; max-width: 380px; margin: 0 auto; font-weight: 500;">Error: ${errMsg}</span>`);
         } finally {
             this.hideCaptionLoader();
             this.isGeneratingCaption = false;
