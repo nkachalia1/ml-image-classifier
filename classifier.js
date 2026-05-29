@@ -1,0 +1,432 @@
+/**
+ * ==========================================================================
+ * NEURALSIGHT ML BACKEND ENGINE (classifier.js)
+ * Manages TensorFlow.js initialization, MobileNet, and KNN Transfer Learning
+ * ==========================================================================
+ */
+
+const ClassifierEngine = {
+    // Models
+    mobileNetModel: null,
+    knnClassifierInstance: null,
+    
+    // Status
+    isLoaded: false,
+    backend: 'cpu',
+    numClasses: 0,
+    classNamesMap: {}, // Maps numeric index to string labels
+    
+    // UI Event listeners hooks
+    onStatusChange: null,
+    onModelLoad: null,
+
+    /**
+     * Initializes TensorFlow.js and loads the core MobileNet model
+     */
+    async init() {
+        this.updateStatus('tf-status', 'loading', 'TF.js: Loading...');
+        
+        try {
+            // Wait for TFJS to be ready
+            await tf.ready();
+            
+            // Set optimal backend (WebGL preferred, WASM fallback, CPU last)
+            this.backend = tf.getBackend();
+            console.log(`[NeuralSight] TensorFlow.js initialized on backend: ${this.backend}`);
+            this.updateStatus('tf-status', 'online', `TF.js: ${this.backend.toUpperCase()}`);
+            
+            // Initialize KNN Classifier
+            this.knnClassifierInstance = knnClassifier.create();
+            console.log('[NeuralSight] KNN Classifier instance created.');
+            
+            // Load MobileNet
+            this.updateStatus('model-status', 'loading', 'MobileNet: Loading...');
+            
+            // Loading MobileNet v1 with 1.0 alpha multiplier and 224px input size
+            this.mobileNetModel = await mobilenet.load({
+                version: 1,
+                alpha: 1.0
+            });
+            
+            this.isLoaded = true;
+            console.log('[NeuralSight] MobileNet v1 model loaded successfully.');
+            this.updateStatus('model-status', 'online', 'MobileNet: Ready');
+            
+            if (this.onModelLoad) {
+                this.onModelLoad();
+            }
+        } catch (error) {
+            console.error('[NeuralSight] Error during ML backend initialization:', error);
+            this.updateStatus('tf-status', 'offline', 'TF.js: Init Failed');
+            this.updateStatus('model-status', 'offline', 'MobileNet: Load Failed');
+        }
+    },
+
+    /**
+     * Set updates for status badges in the UI header
+     */
+    updateStatus(badgeId, state, labelText) {
+        if (this.onStatusChange) {
+            this.onStatusChange(badgeId, state, labelText);
+        }
+    },
+
+    /**
+     * Predict labels on an image or video element using standard MobileNet
+     * @param {HTMLImageElement|HTMLVideoElement|HTMLCanvasElement} element 
+     * @returns {Promise<Array>} List of predictions with className and probability
+     */
+    async predictStandard(element) {
+        if (!this.isLoaded || !this.mobileNetModel) {
+            throw new Error('MobileNet model is not loaded yet');
+        }
+        
+        // MobileNet.classify automatically handles canvas preprocessing
+        const predictions = await this.mobileNetModel.classify(element, 3);
+        return predictions;
+    },
+
+    // Offscreen Canvas for persistent, clean pre-processing resizing
+    offscreenCanvas: null,
+    offscreenCtx: null,
+
+    getOffscreenCanvas() {
+        if (!this.offscreenCanvas) {
+            this.offscreenCanvas = document.createElement('canvas');
+            this.offscreenCanvas.width = 224;
+            this.offscreenCanvas.height = 224;
+            this.offscreenCtx = this.offscreenCanvas.getContext('2d');
+        }
+        return this.offscreenCanvas;
+    },
+
+    preprocessToCanvas(element) {
+        const canvas = this.getOffscreenCanvas();
+        const ctx = this.offscreenCtx;
+        ctx.clearRect(0, 0, 224, 224);
+        
+        let srcWidth = element.width || element.videoWidth || 224;
+        let srcHeight = element.height || element.videoHeight || 224;
+        
+        if (element.naturalWidth) srcWidth = element.naturalWidth;
+        if (element.naturalHeight) srcHeight = element.naturalHeight;
+        
+        let minDim = Math.min(srcWidth, srcHeight);
+        if (minDim <= 0) minDim = 224;
+        
+        // Center crop image calculation to avoid aspect ratio squishing
+        const sx = (srcWidth - minDim) / 2;
+        const sy = (srcHeight - minDim) / 2;
+        
+        ctx.drawImage(element, sx, sy, minDim, minDim, 0, 0, 224, 224);
+        return canvas;
+    },
+
+    /**
+     * Extract bottleneck activation tensors from MobileNet (embedding vector)
+     * @param {HTMLImageElement|HTMLVideoElement|HTMLCanvasElement} element 
+     * @returns {tf.Tensor} Activation tensor of shape [1, 1024]
+     */
+    getActivation(element) {
+        if (!this.isLoaded || !this.mobileNetModel) {
+            throw new Error('Classifier model not loaded');
+        }
+        
+        // Preprocess any dimension element to a center-cropped 224x224 canvas
+        const preprocessedCanvas = this.preprocessToCanvas(element);
+        
+        // Wrap execution in tf.tidy to automatically clean up intermediate tensors in WebGL memory
+        return tf.tidy(() => {
+            const tensor = tf.browser.fromPixels(preprocessedCanvas);
+            
+            // Normalize tensor values to be between -1 and 1 (standard for MobileNet)
+            const normalized = tensor.toFloat().sub(tf.scalar(127.5)).div(tf.scalar(127.5));
+            
+            // Get intermediate activation logits (the pre-classification features layer)
+            return this.mobileNetModel.infer(normalized, true);
+        });
+    },
+
+    addCustomExample(element, classId, className) {
+        if (!this.knnClassifierInstance) {
+            throw new Error('KNN Classifier is not initialized');
+        }
+        
+        // Map class ID to its display name
+        this.classNamesMap[classId] = className;
+        
+        // 1. Add Original Sample Vector
+        const activation = this.getActivation(element);
+        this.knnClassifierInstance.addExample(activation, classId);
+        activation.dispose();
+        
+        // 2. Perform Mathematical Data Augmentation in-browser
+        // Spawns 4 augmented vectors (Flip, Rotate Left, Rotate Right, Brightness Shift)
+        // This expands training coverage 5x to create rotation, perspective and lighting invariance!
+        this.augmentAndTrain(element, classId);
+        
+        this.updateNumClasses();
+        console.log(`[NeuralSight] Recorded sample and 4 augmented vectors for class '${className}' (ID: ${classId})`);
+    },
+
+    /**
+     * Creates 4 visual augmentations on offscreen canvas and registers them into the KNN classifier dataset
+     */
+    augmentAndTrain(element, classId) {
+        const canvas = this.getOffscreenCanvas();
+        const ctx = this.offscreenCtx;
+        
+        let srcWidth = element.width || element.videoWidth || 224;
+        let srcHeight = element.height || element.videoHeight || 224;
+        if (element.naturalWidth) srcWidth = element.naturalWidth;
+        if (element.naturalHeight) srcHeight = element.naturalHeight;
+        
+        let minDim = Math.min(srcWidth, srcHeight);
+        if (minDim <= 0) minDim = 224;
+        
+        const sx = (srcWidth - minDim) / 2;
+        const sy = (srcHeight - minDim) / 2;
+        
+        // Sub-routine to convolve the offscreen canvas frame and feed embedding to model
+        const registerAugmented = () => {
+            tf.tidy(() => {
+                const tensor = tf.browser.fromPixels(canvas);
+                const normalized = tensor.toFloat().sub(tf.scalar(127.5)).div(tf.scalar(127.5));
+                const activationTensor = this.mobileNetModel.infer(normalized, true);
+                this.knnClassifierInstance.addExample(activationTensor, classId);
+            });
+        };
+        
+        // Augmentation 1: Horizontal Flip (Mirror perspective invariance)
+        ctx.clearRect(0, 0, 224, 224);
+        ctx.save();
+        ctx.translate(224, 0);
+        ctx.scale(-1, 1);
+        ctx.drawImage(element, sx, sy, minDim, minDim, 0, 0, 224, 224);
+        ctx.restore();
+        registerAugmented();
+        
+        // Augmentation 2: Rotate Left -6 degrees (Tilt perspective invariance)
+        ctx.clearRect(0, 0, 224, 224);
+        ctx.save();
+        ctx.translate(112, 112);
+        ctx.rotate(-6 * Math.PI / 180);
+        ctx.drawImage(element, sx, sy, minDim, minDim, -112, -112, 224, 224);
+        ctx.restore();
+        registerAugmented();
+        
+        // Augmentation 3: Rotate Right +6 degrees (Tilt perspective invariance)
+        ctx.clearRect(0, 0, 224, 224);
+        ctx.save();
+        ctx.translate(112, 112);
+        ctx.rotate(6 * Math.PI / 180);
+        ctx.drawImage(element, sx, sy, minDim, minDim, -112, -112, 224, 224);
+        ctx.restore();
+        registerAugmented();
+        
+        // Augmentation 4: Brightness Shift 1.15x (Room lighting variation invariance)
+        ctx.clearRect(0, 0, 224, 224);
+        ctx.save();
+        ctx.filter = 'brightness(1.15) contrast(1.05)';
+        ctx.drawImage(element, sx, sy, minDim, minDim, 0, 0, 224, 224);
+        ctx.restore();
+        registerAugmented();
+    },
+
+    /**
+     * Classifies a target image feed using the custom transfer-learned model
+     * @param {HTMLImageElement|HTMLVideoElement|HTMLCanvasElement} element 
+     * @returns {Promise<Object>} Predicted class index, name, and full list of confidences
+     */
+    async predictCustom(element) {
+        if (!this.knnClassifierInstance || this.knnClassifierInstance.getNumClasses() === 0) {
+            return null;
+        }
+        
+        const activation = this.getActivation(element);
+        
+        try {
+            // Predict label using k-Nearest Neighbors clustering
+            const result = await this.knnClassifierInstance.predictClass(activation);
+            
+            // Calculate cosine similarity between query activation and trained datasets
+            const queryVal = activation.dataSync();
+            const vectorLength = queryVal.length; // Dynamically grab model flat features count
+            
+            let queryNorm = 0;
+            for (let i = 0; i < vectorLength; i++) {
+                queryNorm += queryVal[i] * queryVal[i];
+            }
+            queryNorm = Math.sqrt(queryNorm);
+            
+            const dataset = this.knnClassifierInstance.getClassifierDataset();
+            const predictionsList = [];
+            const confidences = result.confidences; // Key: classId, Value: probability [0-1]
+            
+            for (const id in confidences) {
+                let maxSimilarity = 0;
+                const classTensor = dataset[id];
+                
+                if (classTensor) {
+                    const classVal = classTensor.dataSync();
+                    const numExamples = classTensor.shape[0];
+                    
+                    // Loop over each training sample's feature slice
+                    for (let ex = 0; ex < numExamples; ex++) {
+                        let dotProduct = 0;
+                        let exNorm = 0;
+                        const offset = ex * vectorLength;
+                        
+                        for (let i = 0; i < vectorLength; i++) {
+                            const val = classVal[offset + i];
+                            dotProduct += queryVal[i] * val;
+                            exNorm += val * val;
+                        }
+                        
+                        exNorm = Math.sqrt(exNorm);
+                        const similarity = (queryNorm && exNorm) ? (dotProduct / (queryNorm * exNorm)) : 0;
+                        
+                        if (similarity > maxSimilarity) {
+                            maxSimilarity = similarity;
+                        }
+                    }
+                }
+                
+                // SOFT THRESHOLDING SIMILARITY SCALE:
+                // Cosine similarity < 0.81 is treated as completely unrelated (zeroed out).
+                // Cosine similarity >= 0.88 is treated as fully resembled (full confidence).
+                // In between, we smoothly interpolate. This prevents sudden overlaps.
+                let probability = confidences[id];
+                if (maxSimilarity < 0.81) {
+                    probability = 0.0;
+                } else if (maxSimilarity < 0.88) {
+                    // Smooth linear interpolation multiplier
+                    const scale = (maxSimilarity - 0.81) / (0.88 - 0.81);
+                    probability = confidences[id] * scale;
+                }
+                
+                predictionsList.push({
+                    classId: parseInt(id),
+                    className: this.classNamesMap[id] || `Class ${id}`,
+                    probability: probability
+                });
+            }
+            
+            // Sort by highest probability
+            predictionsList.sort((a, b) => b.probability - a.probability);
+            
+            return {
+                label: predictionsList[0].probability > 0 ? predictionsList[0].className : 'Unknown / Generic',
+                classIndex: predictionsList[0].probability > 0 ? predictionsList[0].classId : -1,
+                predictions: predictionsList
+            };
+        } finally {
+            // Dispose activation tensor to prevent memory leakage
+            activation.dispose();
+        }
+    },
+
+    /**
+     * Clear examples from a single custom class
+     */
+    clearClass(classId) {
+        if (this.knnClassifierInstance) {
+            this.knnClassifierInstance.clearClass(classId);
+            delete this.classNamesMap[classId];
+            this.updateNumClasses();
+            console.log(`[NeuralSight] Cleared all examples for class ID: ${classId}`);
+        }
+    },
+
+    /**
+     * Clear all examples from all classes in the KNN Classifier
+     */
+    resetCustomClassifier() {
+        if (this.knnClassifierInstance) {
+            this.knnClassifierInstance.clearAllClasses();
+            this.classNamesMap = {};
+            this.updateNumClasses();
+            console.log('[NeuralSight] Reset custom transfer learning model.');
+        }
+    },
+
+    /**
+     * Updates the count of active classes
+     */
+    updateNumClasses() {
+        if (this.knnClassifierInstance) {
+            this.numClasses = this.knnClassifierInstance.getNumClasses();
+        }
+    },
+
+    /**
+     * Export the custom classifier dataset as a serializable JSON string
+     * @returns {string} Serialized JSON object mapping class datasets
+     */
+    exportDataset() {
+        if (!this.knnClassifierInstance || this.numClasses === 0) {
+            return null;
+        }
+        
+        // Grab dataset tensors
+        const dataset = this.knnClassifierInstance.getClassifierDataset();
+        const serializableDataset = {};
+        
+        // Convert tensors to regular JS arrays
+        Object.keys(dataset).forEach(key => {
+            const tensor = dataset[key];
+            const values = tensor.dataSync();
+            serializableDataset[key] = {
+                shape: tensor.shape,
+                values: Array.from(values)
+            };
+        });
+        
+        const packageData = {
+            classNamesMap: this.classNamesMap,
+            dataset: serializableDataset
+        };
+        
+        return JSON.stringify(packageData);
+    },
+
+    /**
+     * Import a previously serialized JSON dataset back into the KNN instance
+     * @param {string} jsonString Serialized dataset packages
+     */
+    importDataset(jsonString) {
+        if (!this.knnClassifierInstance) {
+            throw new Error('KNN Classifier is not initialized');
+        }
+        
+        const packageData = JSON.parse(jsonString);
+        this.classNamesMap = packageData.classNamesMap;
+        
+        const serializableDataset = packageData.dataset;
+        const dataset = {};
+        
+        Object.keys(serializableDataset).forEach(key => {
+            const data = serializableDataset[key];
+            dataset[key] = tf.tensor2d(data.values, data.shape);
+        });
+        
+        this.knnClassifierInstance.setClassifierDataset(dataset);
+        this.updateNumClasses();
+        console.log('[NeuralSight] Custom dataset imported successfully.');
+    },
+
+    /**
+     * Returns memory diagnostic data
+     */
+    getMemoryMetrics() {
+        const memoryInfo = tf.memory();
+        return {
+            numTensors: memoryInfo.numTensors,
+            numBytes: memoryInfo.numBytes,
+            numMegabytes: (memoryInfo.numBytes / (1024 * 1024)).toFixed(2)
+        };
+    }
+};
+
+// Global Exposure
+window.ClassifierEngine = ClassifierEngine;
