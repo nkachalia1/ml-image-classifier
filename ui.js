@@ -37,6 +37,13 @@ const UIManager = {
     lastGradCAMTime: 0,
     lastGradCAMTargetClass: -1,
     lastGradCAMTargetLabel: '',
+    
+    // Image Captioning Engine States
+    captionMode: 'cloud', // 'cloud' or 'local'
+    isGeneratingCaption: false,
+    captionPipeline: null,
+    autoDescribeInterval: null,
+    hfApiToken: localStorage.getItem('hf_api_token') || '',
 
     /**
      * Bind all DOM events, tab actions and configurations
@@ -48,6 +55,7 @@ const UIManager = {
         this.bindFileUploads();
         this.bindCustomClasses();
         this.bindAnalytics();
+        this.bindCaptioning();
         
         // Start memory diagnostic loop
         setInterval(() => this.updateMemoryDiagnostics(), 2000);
@@ -1330,6 +1338,225 @@ const UIManager = {
     hideTrainingLoader() {
         const modal = document.getElementById('training-hud-modal');
         modal.classList.add('hidden');
+    },
+
+    /**
+     * Multimodal AI Image Captioning System Bindings
+     */
+    bindCaptioning() {
+        const cloudBtn = document.getElementById('engine-cloud-btn');
+        const localBtn = document.getElementById('engine-local-btn');
+        const generateBtn = document.getElementById('btn-generate-caption');
+        const toggleTokenBtn = document.getElementById('btn-toggle-token-input');
+        const tokenBox = document.getElementById('hf-token-box');
+        const tokenInput = document.getElementById('hf-api-token');
+        const saveTokenBtn = document.getElementById('btn-save-hf-token');
+        const autoDescribeToggle = document.getElementById('toggle-auto-describe');
+        const engineLabel = document.getElementById('caption-engine-label');
+
+        // Populate HF token input from saved state
+        if (this.hfApiToken) {
+            tokenInput.value = this.hfApiToken;
+        }
+
+        // Engine Select Cloud
+        cloudBtn.addEventListener('click', () => {
+            cloudBtn.classList.add('active');
+            localBtn.classList.remove('active');
+            this.captionMode = 'cloud';
+            engineLabel.textContent = 'ENGINE: CLOUD (SALESFORCE/BLIP)';
+            console.log('[NeuralSight] Multimodal engine set to: Cloud API (BLIP)');
+        });
+
+        // Engine Select Local
+        localBtn.addEventListener('click', () => {
+            localBtn.classList.add('active');
+            cloudBtn.classList.remove('active');
+            this.captionMode = 'local';
+            engineLabel.textContent = 'ENGINE: LOCAL (VIT-GPT2 / QUANTIZED)';
+            console.log('[NeuralSight] Multimodal engine set to: Local AI (ViT-GPT2)');
+        });
+
+        // Toggle API Token visibility
+        toggleTokenBtn.addEventListener('click', () => {
+            tokenBox.classList.toggle('hidden');
+        });
+
+        // Save Token
+        saveTokenBtn.addEventListener('click', () => {
+            const token = tokenInput.value.trim();
+            this.hfApiToken = token;
+            localStorage.setItem('hf_api_token', token);
+            tokenBox.classList.add('hidden');
+            console.log('[NeuralSight] Saved secure Hugging Face API Token.');
+        });
+
+        // Generate manual description
+        generateBtn.addEventListener('click', () => {
+            this.triggerCaptionGeneration();
+        });
+
+        // Auto describe toggle switch
+        autoDescribeToggle.addEventListener('change', () => {
+            if (autoDescribeToggle.checked) {
+                console.log('[NeuralSight] Enabled Autoloop describing (every 5 seconds)');
+                this.triggerCaptionGeneration(); // Run immediately first
+                this.autoDescribeInterval = setInterval(() => {
+                    this.triggerCaptionGeneration();
+                }, 5000);
+            } else {
+                console.log('[NeuralSight] Disabled Autoloop describing.');
+                if (this.autoDescribeInterval) {
+                    clearInterval(this.autoDescribeInterval);
+                    this.autoDescribeInterval = null;
+                }
+            }
+        });
+    },
+
+    async triggerCaptionGeneration() {
+        if (this.isGeneratingCaption) return;
+        
+        let elementToDescribe = null;
+        if (this.activeSource === 'webcam' && this.isWebcamActive) {
+            elementToDescribe = document.getElementById('webcam');
+        } else if (this.activeSource === 'upload' && this.activeImageElement) {
+            elementToDescribe = this.activeImageElement;
+        } else if (this.activeSource === 'gallery' && this.activeImageElement) {
+            elementToDescribe = this.activeImageElement;
+        }
+
+        if (!elementToDescribe) {
+            this.updateCaptionOutput('<span style="font-style: italic; color: var(--color-text-muted);">Please load camera feed or image presets first</span>');
+            return;
+        }
+
+        this.isGeneratingCaption = true;
+        this.showCaptionLoader();
+
+        try {
+            let caption = '';
+            if (this.captionMode === 'cloud') {
+                caption = await this.generateCaptionCloud(elementToDescribe);
+            } else {
+                caption = await this.generateCaptionLocal(elementToDescribe);
+            }
+            
+            // Clean/format generated output text gracefully
+            if (caption) {
+                const formatted = caption.charAt(0).toUpperCase() + caption.slice(1);
+                this.updateCaptionOutput(`"${formatted}."`);
+            } else {
+                this.updateCaptionOutput('<span style="font-style: italic; color: var(--color-text-muted);">Empty response. Please try again.</span>');
+            }
+        } catch (err) {
+            console.error('[NeuralSight] Multimodal AI captioning failed:', err);
+            this.updateCaptionOutput(`<span style="color: var(--color-red); font-size: 11px;">Error: ${err.message || 'Generation failed. Try Cloud API mode.'}</span>`);
+        } finally {
+            this.hideCaptionLoader();
+            this.isGeneratingCaption = false;
+        }
+    },
+
+    async generateCaptionCloud(element) {
+        this.updateCaptionLoaderText('Processing image...');
+        const imageBlob = await this.getFrameBlob(element);
+        
+        this.updateCaptionLoaderText('Querying Hugging Face API...');
+        const url = 'https://api-inference.huggingface.co/models/Salesforce/blip-image-captioning-base';
+        const headers = {};
+        if (this.hfApiToken) {
+            headers["Authorization"] = `Bearer ${this.hfApiToken}`;
+        }
+        
+        const response = await fetch(url, {
+            method: "POST",
+            headers: headers,
+            body: imageBlob
+        });
+        
+        if (!response.ok) {
+            const errData = await response.json().catch(() => ({}));
+            if (response.status === 503) {
+                throw new Error('Hugging Face model is loading/warming up. Please try again in 10 seconds.');
+            }
+            throw new Error(errData.error || `API returned status ${response.status}`);
+        }
+        
+        const result = await response.json();
+        return result[0]?.generated_text;
+    },
+
+    async generateCaptionLocal(element) {
+        if (!window.transformers) {
+            throw new Error('Transformers.js CDN failed to load.');
+        }
+
+        if (!this.captionPipeline) {
+            this.updateCaptionLoaderText('Downloading model (~120MB)...');
+            const { pipeline } = window.transformers;
+            this.captionPipeline = await pipeline('image-to-text', 'Xenova/vit-gpt2-image-captioning', {
+                quantized: true
+            });
+        }
+
+        this.updateCaptionLoaderText('Running ONNX Local Pipeline...');
+        
+        // Resize element to 224x224 data URL for local model feeding
+        const canvas = document.createElement('canvas');
+        canvas.width = 224;
+        canvas.height = 224;
+        const ctx = canvas.getContext('2d');
+        
+        // Mirror if webcam
+        if (this.activeSource === 'webcam' && this.isWebcamActive) {
+            ctx.translate(224, 0);
+            ctx.scale(-1, 1);
+        }
+        ctx.drawImage(element, 0, 0, 224, 224);
+        
+        const dataUrl = canvas.toDataURL('image/jpeg', 0.9);
+        const result = await this.captionPipeline(dataUrl);
+        return result[0]?.generated_text;
+    },
+
+    getFrameBlob(element) {
+        return new Promise((resolve) => {
+            const canvas = document.createElement('canvas');
+            canvas.width = 384; // optimal size for BLIP base
+            canvas.height = 384;
+            const ctx = canvas.getContext('2d');
+            
+            // Mirror camera frame if webcam is active
+            if (this.activeSource === 'webcam' && this.isWebcamActive) {
+                ctx.translate(384, 0);
+                ctx.scale(-1, 1);
+            }
+            
+            ctx.drawImage(element, 0, 0, 384, 384);
+            canvas.toBlob((blob) => {
+                resolve(blob);
+            }, 'image/jpeg', 0.95);
+        });
+    },
+
+    showCaptionLoader() {
+        document.getElementById('caption-loader').classList.remove('hidden');
+        document.getElementById('caption-output').style.opacity = '0.1';
+    },
+
+    hideCaptionLoader() {
+        document.getElementById('caption-loader').classList.add('hidden');
+        document.getElementById('caption-output').style.opacity = '1';
+    },
+
+    updateCaptionLoaderText(text) {
+        const textBlock = document.getElementById('caption-output');
+        textBlock.innerHTML = `<span style="font-style: italic; color: var(--color-text-muted); font-size: 11px;">${text}</span>`;
+    },
+
+    updateCaptionOutput(htmlContent) {
+        document.getElementById('caption-output').innerHTML = htmlContent;
     }
 };
 

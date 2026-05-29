@@ -22,6 +22,8 @@
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.17.0/dist/tf.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/mobilenet@2.1.0/dist/mobilenet.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/knn-classifier@1.2.4/dist/knn-classifier.min.js"></script>
+    <!-- Transformers.js CDN for in-browser Local AI Image Captioning -->
+    <script src="https://cdn.jsdelivr.net/npm/@xenova/transformers@2.17.2/dist/transformers.min.js"></script>
 </head>
 <body>
     <div class="glow-backdrop"></div>
@@ -215,6 +217,63 @@
                             <div class="metric-card">
                                 <span class="metric-title">Inference Speed</span>
                                 <span class="metric-value text-glow-magenta" id="inference-time">0 ms</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Right: Multimodal AI Captioning -->
+                    <div class="panel glass-card spacer-top-small" style="margin-top: 20px; min-height: auto;">
+                        <div class="panel-header">
+                            <h2 class="panel-title">
+                                <i class="fa-solid fa-wand-magic-sparkles icon-magenta"></i>
+                                <span>AI Multimodal Descriptor</span>
+                            </h2>
+                            <div class="toggle-switch">
+                                <label class="switch">
+                                    <input type="checkbox" id="toggle-auto-describe">
+                                    <span class="slider round"></span>
+                                </label>
+                                <span class="switch-label">Auto-Describe</span>
+                            </div>
+                        </div>
+
+                        <!-- Engine Selector -->
+                        <div class="selector-pills compact" style="margin-bottom: 14px;">
+                            <button class="selector-pill active" data-engine="cloud" id="engine-cloud-btn">
+                                <i class="fa-solid fa-cloud"></i> Cloud API (BLIP)
+                            </button>
+                            <button class="selector-pill" data-engine="local" id="engine-local-btn">
+                                <i class="fa-solid fa-laptop-code"></i> Local AI (ViT-GPT2)
+                            </button>
+                        </div>
+
+                        <!-- Optional API Key Box -->
+                        <div class="hf-token-row hidden" id="hf-token-box" style="margin-bottom: 14px; display: flex; gap: 8px;">
+                            <input type="password" id="hf-api-token" placeholder="Optional Hugging Face Token (Bearer)" style="flex: 1; font-size: 11px; padding: 6px 10px; height: 32px; background: hsla(220, 30%, 5%, 0.5); border: 1px solid var(--color-border); border-radius: var(--radius-sm); color: var(--color-text-primary); outline: none;">
+                            <button class="btn btn-secondary btn-sm" id="btn-save-hf-token" style="height: 32px; padding: 0 12px; font-size: 11px; font-weight: 700;">Save</button>
+                        </div>
+
+                        <!-- Generated Description Quote Box -->
+                        <div class="caption-container" style="background: hsla(220, 30%, 5%, 0.35); border: 1px solid var(--color-border); border-radius: var(--radius-md); padding: 18px; position: relative; min-height: 90px; display: flex; align-items: center; justify-content: center; margin-bottom: 18px; transition: var(--transition-normal);">
+                            <div class="caption-text-block text-center" id="caption-output" style="font-family: var(--font-sans); font-size: 14px; font-weight: 600; line-height: 1.5; color: var(--color-text-secondary); width: 100%;">
+                                <span style="font-style: italic; color: var(--color-text-muted);">Awaiting target trigger... click Describe below</span>
+                            </div>
+                            <!-- Dynamic typing dots loader -->
+                            <div class="typing-loader hidden" id="caption-loader">
+                                <span></span><span></span><span></span>
+                            </div>
+                        </div>
+
+                        <!-- Action Bar -->
+                        <div class="caption-actions" style="display: flex; justify-content: space-between; align-items: center; border-top: 1px solid var(--color-border); padding-top: 14px;">
+                            <span class="fps-counter" id="caption-engine-label" style="font-family: var(--font-mono); font-size: 10px; color: var(--color-text-muted);">ENGINE: CLOUD (SALESFORCE/BLIP)</span>
+                            <div style="display: flex; gap: 8px;">
+                                <button class="btn btn-secondary btn-sm btn-icon-only" id="btn-toggle-token-input" title="Set Hugging Face Token">
+                                    <i class="fa-solid fa-key"></i>
+                                </button>
+                                <button class="btn btn-primary btn-sm" id="btn-generate-caption" style="padding: 6px 16px; font-size: 12px;">
+                                    <i class="fa-solid fa-comment-dots"></i> Generate Description
+                                </button>
                             </div>
                         </div>
                     </div>

@@ -51,8 +51,8 @@ const ClassifierEngine = {
                 alpha: 1.0
             });
             
-            // Initialize Grad-CAM sub-models
-            this.initGradCAM();
+            // Initialize Grad-CAM sub-models asynchronously
+            await this.initGradCAM();
             
             this.isLoaded = true;
             console.log('[NeuralSight] MobileNet v1 model loaded successfully.');
@@ -434,16 +434,16 @@ const ClassifierEngine = {
     },
 
     /**
-     * Initializes the Grad-CAM sub-models
+     * Initializes the Grad-CAM sub-models asynchronously by loading raw LayersModel
      */
-    initGradCAM() {
-        if (!this.mobileNetModel || !this.mobileNetModel.model) {
-            console.warn('[NeuralSight] Cannot initialize Grad-CAM: MobileNet not loaded.');
-            return;
+    async initGradCAM() {
+        if (this.gradCAMModel && this.gradCAMSubModel) {
+            return; // already initialized
         }
         
         try {
-            const model = this.mobileNetModel.model;
+            console.log('[NeuralSight] Loading MobileNet LayersModel for Grad-CAM activations...');
+            const model = await tf.loadLayersModel('https://storage.googleapis.com/tfjs-models/tfjs/mobilenet_v1_1.0_224/model.json');
             const layerName = 'conv_pw_13_relu'; // standard MobileNet v1 final conv activation layer
             const convLayer = model.getLayer(layerName);
             
@@ -475,7 +475,7 @@ const ClassifierEngine = {
                 // Also create a model that outputs the conv layer activations directly from input image
                 this.gradCAMModel = tf.model({ inputs: model.inputs, outputs: convLayer.output });
                 
-                console.log(`[NeuralSight] Grad-CAM initialized with layer: ${layerName}`);
+                console.log(`[NeuralSight] Grad-CAM initialized successfully with layer: ${layerName}`);
             } else {
                 console.error('[NeuralSight] Grad-CAM Layer not found:', layerName);
             }
@@ -513,7 +513,7 @@ const ClassifierEngine = {
      */
     async computeGradCAM(element, targetClassIndex) {
         if (!this.gradCAMModel || !this.gradCAMSubModel) {
-            this.initGradCAM();
+            await this.initGradCAM();
         }
         
         if (!this.gradCAMModel || !this.gradCAMSubModel) {
