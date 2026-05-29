@@ -382,6 +382,9 @@
 
             <!-- ================== NEURAL X-RAY TAB ================== -->
             <section class="tab-content hidden" id="tab-xray">
+                <!-- Hidden camera element for tab-shifting active decoding stability -->
+                <video id="xray-webcam" autoplay playsinline muted style="position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none;"></video>
+                
                 <div class="grid-2col">
                     
                     <!-- Left: Control & Neural Viewport -->

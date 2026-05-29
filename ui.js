@@ -153,6 +153,7 @@ const UIManager = {
         
         const videoElement = document.getElementById('webcam');
         const customVideoElement = document.getElementById('custom-feed-video');
+        const xrayVideoElement = document.getElementById('xray-webcam');
         
         try {
             this.stream = await navigator.mediaDevices.getUserMedia({
@@ -162,6 +163,7 @@ const UIManager = {
             
             videoElement.srcObject = this.stream;
             customVideoElement.srcObject = this.stream;
+            if (xrayVideoElement) xrayVideoElement.srcObject = this.stream;
             
             this.isWebcamActive = true;
             document.getElementById('webcam-overlay-prompt').classList.add('hidden');

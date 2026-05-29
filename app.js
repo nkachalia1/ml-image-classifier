@@ -279,7 +279,7 @@ const App = {
             
             // Read standard tab settings to grab correct active preview target
             if (UIManager.activeSource === 'webcam' && UIManager.isWebcamActive) {
-                activeElement = document.getElementById('webcam');
+                activeElement = document.getElementById('xray-webcam') || document.getElementById('webcam');
             } else if (UIManager.activeSource === 'upload' && UIManager.activeImageElement) {
                 activeElement = UIManager.activeImageElement;
             } else if (UIManager.activeSource === 'gallery' && UIManager.activeImageElement) {
