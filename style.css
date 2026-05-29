@@ -1221,8 +1221,14 @@ input:disabled + .slider {
 /* Radio Tiles selector */
 .radio-tiles {
     display: grid;
-    grid-template-columns: repeat(2, 1fr);
+    grid-template-columns: repeat(auto-fit, minmax(100px, 1fr));
     gap: 10px;
+}
+
+@media (min-width: 576px) {
+    .radio-tiles {
+        grid-template-columns: repeat(5, 1fr);
+    }
 }
 
 .radio-tile {

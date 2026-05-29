@@ -1,0 +1,543 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NeuralSight // Real-Time AI Image Classifier & Transfer Learning Playground</title>
+    
+    <!-- Meta SEO Tags -->
+    <meta name="description" content="An interactive, in-browser machine learning image classifier and transfer-learning playground powered by TensorFlow.js. Train your own custom model in real-time.">
+    <meta name="keywords" content="Machine Learning, TensorFlow.js, Image Classifier, Transfer Learning, MobileNet, In-Browser AI, WebGL Acceleration">
+    
+    <!-- Fonts and Icons -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Outfit:wght@300;400;600;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    
+    <!-- Custom Style Sheet -->
+    
+    <!-- TensorFlow.js Library Stack (MANDATORY CDNs) -->
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.17.0/dist/tf.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/mobilenet@2.1.0/dist/mobilenet.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/knn-classifier@1.2.4/dist/knn-classifier.min.js"></script>
+  <link rel="stylesheet" crossorigin href="/assets/index-BPsldZq7.css">
+</head>
+<body>
+    <div class="glow-backdrop"></div>
+    
+    <div class="app-container">
+        <!-- HEADER -->
+        <header class="main-header">
+            <div class="brand">
+                <div class="brand-logo">
+                    <i class="fa-solid fa-brain-circuit brain-icon"></i>
+                </div>
+                <div class="brand-text">
+                    <h1>NeuralSight</h1>
+                    <span class="subtitle">Real-Time AI Playground</span>
+                </div>
+            </div>
+            
+            <div class="system-status">
+                <div class="status-badge" id="tf-status">
+                    <span class="status-dot offline"></span>
+                    <span class="status-label">TF.js: Loading...</span>
+                </div>
+                <div class="status-badge" id="model-status">
+                    <span class="status-dot offline"></span>
+                    <span class="status-label">MobileNet: Offline</span>
+                </div>
+                <div class="status-badge" id="webgl-badge">
+                    <i class="fa-solid fa-bolt icon"></i>
+                    <span class="status-label" id="backend-label">GPU</span>
+                </div>
+            </div>
+        </header>
+
+        <!-- DASHBOARD NAVIGATION -->
+        <nav class="nav-tabs">
+            <button class="nav-tab active" data-tab="tab-standard" id="tab-btn-standard">
+                <i class="fa-solid fa-magnifying-glass"></i>
+                <span>Standard Classifier</span>
+            </button>
+            <button class="nav-tab" data-tab="tab-custom" id="tab-btn-custom">
+                <i class="fa-solid fa-graduation-cap"></i>
+                <span>Custom Trainer</span>
+            </button>
+            <button class="nav-tab" data-tab="tab-xray" id="tab-btn-xray">
+                <i class="fa-solid fa-microscope"></i>
+                <span>Neural X-Ray</span>
+            </button>
+            <button class="nav-tab" data-tab="tab-logs" id="tab-btn-logs">
+                <i class="fa-solid fa-chart-line"></i>
+                <span>Analytics & Logs</span>
+            </button>
+        </nav>
+
+        <!-- MAIN WORKSPACE -->
+        <main class="workspace">
+            
+            <!-- ================== STANDARD CLASSIFIER TAB ================== -->
+            <section class="tab-content active" id="tab-standard">
+                <div class="grid-2col">
+                    
+                    <!-- Left: Control & Feed Input -->
+                    <div class="panel glass-card">
+                        <div class="panel-header">
+                            <h2 class="panel-title"><i class="fa-solid fa-circle-play icon-cyan"></i>Input Source Selection</h2>
+                        </div>
+                        
+                        <!-- Source selector buttons -->
+                        <div class="selector-pills">
+                            <button class="selector-pill active" data-source="webcam" id="src-webcam-btn">
+                                <i class="fa-solid fa-video"></i> Live Webcam
+                            </button>
+                            <button class="selector-pill" data-source="upload" id="src-upload-btn">
+                                <i class="fa-solid fa-cloud-arrow-up"></i> Upload File
+                            </button>
+                            <button class="selector-pill" data-source="gallery" id="src-gallery-btn">
+                                <i class="fa-solid fa-images"></i> Presets
+                            </button>
+                        </div>
+                        
+                        <!-- Webcam Viewport -->
+                        <div class="viewport-wrapper" id="webcam-viewport">
+                            <video id="webcam" autoplay playsinline muted class="feed-element"></video>
+                            <canvas id="webcam-overlay" class="overlay-canvas"></canvas>
+                            <div class="viewport-overlay" id="webcam-overlay-prompt">
+                                <i class="fa-solid fa-video-slash error-icon"></i>
+                                <p>Webcam is starting or permission not granted</p>
+                                <button class="btn btn-primary" id="btn-enable-webcam">
+                                    <i class="fa-solid fa-camera"></i> Enable Camera
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- File Upload Zone -->
+                        <div class="viewport-wrapper hidden" id="upload-viewport">
+                            <div class="drop-zone" id="drop-zone">
+                                <i class="fa-solid fa-folder-open upload-icon"></i>
+                                <h3>Drag & Drop Image Here</h3>
+                                <p>Supports JPG, PNG, WEBP (Max 5MB)</p>
+                                <span class="or-divider">or</span>
+                                <label for="file-input" class="btn btn-secondary cursor-pointer">Browse Files</label>
+                                <input type="file" id="file-input" accept="image/*" class="hidden">
+                            </div>
+                            <div class="preview-zone hidden" id="upload-preview-container">
+                                <img id="upload-preview" alt="User Upload Preview">
+                                <button class="btn-clear" id="btn-clear-upload">
+                                    <i class="fa-solid fa-times"></i>
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- Gallery Presets Viewport -->
+                        <div class="viewport-wrapper hidden" id="gallery-viewport">
+                            <div class="gallery-grid">
+                                <div class="gallery-card" data-url="https://images.unsplash.com/photo-1543466835-00a7907e9de1?auto=format&fit=crop&q=80&w=400">
+                                    <img src="https://images.unsplash.com/photo-1543466835-00a7907e9de1?auto=format&fit=crop&q=80&w=200" alt="Dog">
+                                    <span>Golden Retriever</span>
+                                </div>
+                                <div class="gallery-card" data-url="https://images.unsplash.com/photo-1514888286974-6c03e2ca1dba?auto=format&fit=crop&q=80&w=400">
+                                    <img src="https://images.unsplash.com/photo-1514888286974-6c03e2ca1dba?auto=format&fit=crop&q=80&w=200" alt="Cat">
+                                    <span>Domestic Cat</span>
+                                </div>
+                                <div class="gallery-card" data-url="https://images.unsplash.com/photo-1505740420928-5e560c06d30e?auto=format&fit=crop&q=80&w=400">
+                                    <img src="https://images.unsplash.com/photo-1505740420928-5e560c06d30e?auto=format&fit=crop&q=80&w=200" alt="Headphones">
+                                    <span>Headphones</span>
+                                </div>
+                                <div class="gallery-card" data-url="https://images.unsplash.com/photo-1523275335684-37898b6baf30?auto=format&fit=crop&q=80&w=400">
+                                    <img src="https://images.unsplash.com/photo-1523275335684-37898b6baf30?auto=format&fit=crop&q=80&w=200" alt="Watch">
+                                    <span>Smart Watch</span>
+                                </div>
+                                <div class="gallery-card" data-url="https://images.unsplash.com/photo-1527689368864-3a821dbccc34?auto=format&fit=crop&q=80&w=400">
+                                    <img src="https://images.unsplash.com/photo-1527689368864-3a821dbccc34?auto=format&fit=crop&q=80&w=200" alt="Laptop">
+                                    <span>Laptop</span>
+                                </div>
+                                <div class="gallery-card" data-url="https://images.unsplash.com/photo-1564013799919-ab600027ffc6?auto=format&fit=crop&q=80&w=400">
+                                    <img src="https://images.unsplash.com/photo-1564013799919-ab600027ffc6?auto=format&fit=crop&q=80&w=200" alt="House">
+                                    <span>Modern House</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Right: Classification Results -->
+                    <div class="panel glass-card">
+                        <div class="panel-header">
+                            <h2 class="panel-title"><i class="fa-solid fa-chart-simple icon-violet"></i>Live Inference Output</h2>
+                            <div class="fps-counter" id="fps-display">FPS: 00 // Latency: 0ms</div>
+                        </div>
+                        
+                        <div class="predictions-container">
+                            <div class="prediction-main" id="pred-top-card">
+                                <div class="pred-label" id="top-pred-label">No Target Loaded</div>
+                                <div class="pred-percentage" id="top-pred-pct">0%</div>
+                                <div class="progress-bar-wrapper">
+                                    <div class="progress-bar glow-purple" id="top-pred-bar" style="width: 0%"></div>
+                                </div>
+                            </div>
+                            
+                            <hr class="divider">
+                            
+                            <div class="predictions-list" id="secondary-predictions">
+                                <div class="prediction-item">
+                                    <div class="item-meta">
+                                        <span class="item-label">Prediction #2</span>
+                                        <span class="item-pct">0%</span>
+                                    </div>
+                                    <div class="progress-bar-wrapper slim">
+                                        <div class="progress-bar" style="width: 0%"></div>
+                                    </div>
+                                </div>
+                                <div class="prediction-item">
+                                    <div class="item-meta">
+                                        <span class="item-label">Prediction #3</span>
+                                        <span class="item-pct">0%</span>
+                                    </div>
+                                    <div class="progress-bar-wrapper slim">
+                                        <div class="progress-bar" style="width: 0%"></div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="inference-dashboard">
+                            <div class="metric-card">
+                                <span class="metric-title">Active Device</span>
+                                <span class="metric-value text-glow-cyan" id="inference-device">GPU</span>
+                            </div>
+                            <div class="metric-card">
+                                <span class="metric-title">Model Memory</span>
+                                <span class="metric-value text-glow-purple" id="inference-memory">0.0 MB</span>
+                            </div>
+                            <div class="metric-card">
+                                <span class="metric-title">Inference Speed</span>
+                                <span class="metric-value text-glow-magenta" id="inference-time">0 ms</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- ================== CUSTOM TRAINER TAB ================== -->
+            <section class="tab-content hidden" id="tab-custom">
+                <div class="grid-2col">
+                    
+                    <!-- Left: Custom Trainer Settings & Dataset -->
+                    <div class="panel glass-card flex-col">
+                        <div class="panel-header">
+                            <h2 class="panel-title"><i class="fa-solid fa-folder-plus icon-cyan"></i>Custom Classes & Capture</h2>
+                            <div class="help-tooltip">
+                                <i class="fa-solid fa-circle-question"></i>
+                                <span class="tooltip-text">Add class names, then capture webcam images or upload files to feed the custom neural head.</span>
+                            </div>
+                        </div>
+                        
+                        <div class="class-adder-row">
+                            <input type="text" id="custom-class-name" placeholder="Type Class Name (e.g. 'Soda Can')" maxlength="20">
+                            <button class="btn btn-primary" id="btn-add-class">
+                                <i class="fa-solid fa-plus"></i> Add Class
+                            </button>
+                        </div>
+                        
+                        <!-- Batch Upload & Labeled Tagger Row -->
+                        <div class="class-adder-row" style="margin-top: 10px; border-top: 1px solid var(--color-border); padding-top: 15px;">
+                            <div class="upload-tag-wrapper" style="display: flex; gap: 10px; width: 100%;">
+                                <label for="batch-media-upload" class="btn btn-secondary cursor-pointer" style="flex: 1; text-align: center; font-size: 11px; white-space: nowrap;" id="batch-upload-label">
+                                    <i class="fa-solid fa-images"></i> Select Images
+                                </label>
+                                <input type="file" id="batch-media-upload" accept="image/*,video/*" multiple class="hidden">
+                                <input type="text" id="batch-media-label" placeholder="Enter Label Tag (e.g. 'soda')" maxlength="20" style="flex: 1.2; font-size: 12px;">
+                                <button class="btn btn-primary" id="btn-batch-train" style="flex: 0.8; font-size: 11px; white-space: nowrap;">
+                                    <i class="fa-solid fa-tags"></i> Upload & Tag
+                                </button>
+                            </div>
+                        </div>
+                        
+                        <div class="scroll-container flex-grow" id="class-cards-container">
+                            <!-- Custom class cards will be inserted dynamically here -->
+                            <div class="empty-state-card" id="no-classes-prompt">
+                                <i class="fa-solid fa-graduation-cap"></i>
+                                <h3>No Custom Classes Created Yet</h3>
+                                <p>Enter a label name above to build your own custom neural categories</p>
+                            </div>
+                        </div>
+
+                        <div class="custom-control-bar">
+                            <button class="btn btn-danger" id="btn-clear-classifier" disabled>
+                                <i class="fa-solid fa-trash-can"></i> Reset Model
+                            </button>
+                            <div class="model-io-buttons">
+                                <button class="btn btn-secondary btn-icon-only" id="btn-export-model" title="Export Model Parameters" disabled>
+                                    <i class="fa-solid fa-download"></i>
+                                </button>
+                                <label for="model-import-input" class="btn btn-secondary btn-icon-only" title="Import Model Parameters">
+                                    <i class="fa-solid fa-upload"></i>
+                                </label>
+                                <input type="file" id="model-import-input" accept=".json" class="hidden">
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Right: Custom Predict Panel -->
+                    <div class="panel glass-card">
+                        <div class="panel-header">
+                            <h2 class="panel-title"><i class="fa-solid fa-wand-magic-sparkles icon-magenta"></i>Custom Real-Time Inference</h2>
+                            <div class="toggle-switch">
+                                <label class="switch">
+                                    <input type="checkbox" id="toggle-custom-predict" disabled>
+                                    <span class="slider round"></span>
+                                </label>
+                                <span class="switch-label">Live Predict</span>
+                            </div>
+                        </div>
+
+                        <div class="custom-inference-container">
+                            <!-- Visualizer of the feed currently being scored -->
+                            <div class="custom-feed-preview">
+                                <video id="custom-feed-video" autoplay playsinline muted></video>
+                                <div class="prediction-overlay" id="custom-prediction-floating">Inactive</div>
+                            </div>
+                            
+                            <div class="predictions-container">
+                                <div class="prediction-main" id="custom-top-pred">
+                                    <div class="pred-label" id="custom-top-label">No Target Loaded</div>
+                                    <div class="pred-percentage" id="custom-top-pct">0%</div>
+                                    <div class="progress-bar-wrapper">
+                                        <div class="progress-bar glow-cyan" id="custom-top-bar" style="width: 0%"></div>
+                                    </div>
+                                </div>
+                                
+                                <hr class="divider">
+                                
+                                <div class="predictions-list" id="custom-secondary-predictions">
+                                    <!-- Dynamic prediction scores for other classes go here -->
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- ================== NEURAL X-RAY TAB ================== -->
+            <section class="tab-content hidden" id="tab-xray">
+                <div class="grid-2col">
+                    
+                    <!-- Left: Control & Neural Viewport -->
+                    <div class="panel glass-card">
+                        <div class="panel-header">
+                            <h2 class="panel-title"><i class="fa-solid fa-sliders icon-cyan"></i>Preprocessor Configuration</h2>
+                        </div>
+                        
+                        <div class="filter-controls">
+                            <div class="control-group">
+                                <label class="control-label">X-Ray Active Filter</label>
+                                <div class="radio-tiles">
+                                    <label class="radio-tile">
+                                        <input type="radio" name="xray-filter" value="normal" checked>
+                                        <div class="tile-content">
+                                            <i class="fa-solid fa-eye"></i>
+                                            <span>Original</span>
+                                        </div>
+                                    </label>
+                                    <label class="radio-tile">
+                                        <input type="radio" name="xray-filter" value="grayscale">
+                                        <div class="tile-content">
+                                            <i class="fa-solid fa-palette"></i>
+                                            <span>Grayscale</span>
+                                        </div>
+                                    </label>
+                                    <label class="radio-tile">
+                                        <input type="radio" name="xray-filter" value="edge">
+                                        <div class="tile-content">
+                                            <i class="fa-solid fa-lines-leaning"></i>
+                                            <span>Sobel Edge</span>
+                                        </div>
+                                    </label>
+                                    <label class="radio-tile">
+                                        <input type="radio" name="xray-filter" value="grid">
+                                        <div class="tile-content">
+                                            <i class="fa-solid fa-border-all"></i>
+                                            <span>Pixel Grid</span>
+                                        </div>
+                                    </label>
+                                    <label class="radio-tile">
+                                        <input type="radio" name="xray-filter" value="gradcam">
+                                        <div class="tile-content">
+                                            <i class="fa-solid fa-fire-flame-curved"></i>
+                                            <span>Grad-CAM</span>
+                                        </div>
+                                    </label>
+                                </div>
+                            </div>
+
+                            <div class="control-group spacer-top">
+                                <label class="control-label">Model Resolution Feed (Input Tensor Mapping)</label>
+                                <p class="control-description">MobileNet strictly receives an input tensor of size 224 &times; 224 pixels. Below is the exact matrix representation that feeds into the neural nodes.</p>
+                            </div>
+                            
+                            <div class="tensor-details">
+                                <div class="tensor-shape">
+                                    <span class="label">Tensor Dimensions</span>
+                                    <span class="value">[1, 224, 224, 3]</span>
+                                </div>
+                                <div class="tensor-shape">
+                                    <span class="label">Normalization Range</span>
+                                    <span class="value">[-1.0, 1.0]</span>
+                                </div>
+                            </div>
+                            
+                            <!-- Grad-CAM Dynamic Explanation Card -->
+                            <div class="xray-explain-card hidden" id="xray-explain-card">
+                                <div class="explain-header">
+                                    <i class="fa-solid fa-fire-flame-curved explain-icon"></i>
+                                    <h3>Grad-CAM Decision Map</h3>
+                                </div>
+                                <div class="explain-body">
+                                    <p class="explain-intro">Grad-CAM (Gradient-weighted Class Activation Mapping) uses gradients flowing back into the final convolutional layer of MobileNet to map spatial influences.</p>
+                                    <div class="explain-metric">
+                                        <span class="label">Target Explanation:</span>
+                                        <span class="value text-glow-magenta" id="xray-explain-target">Awaiting Active Pred</span>
+                                    </div>
+                                    <div class="explain-metric">
+                                        <span class="label">Feature Map Layer:</span>
+                                        <span class="value text-glow-cyan">conv_pw_13_relu</span>
+                                    </div>
+                                    <div class="explain-details">
+                                        <span class="details-title">Decision Influence Legend:</span>
+                                        <ul class="explain-list">
+                                            <li><span class="color-indicator glow-hot"></span> <strong>Orange / Red / White</strong>: Strong positive driver.</li>
+                                            <li><span class="color-indicator glow-violet"></span> <strong>Magenta / Violet</strong>: Mild baseline influence.</li>
+                                            <li><span class="color-indicator transparent"></span> <strong>Dark / Transparent</strong>: Ignored / Negligible background.</li>
+                                        </ul>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Right: X-Ray Canvas Rendering -->
+                    <div class="panel glass-card">
+                        <div class="panel-header">
+                            <h2 class="panel-title"><i class="fa-solid fa-microscope icon-magenta"></i>Inside the Neural Network</h2>
+                        </div>
+                        
+                        <div class="xray-visualizer-container">
+                            <div class="canvas-panel">
+                                <span class="canvas-label">Preprocessed View (224 &times; 224)</span>
+                                <div class="canvas-holder">
+                                    <canvas id="xray-canvas" width="224" height="224"></canvas>
+                                </div>
+                            </div>
+                            
+                            <div class="canvas-panel">
+                                <span class="canvas-label">Color Distribution Histogram</span>
+                                <div class="canvas-holder">
+                                    <canvas id="histogram-canvas" width="280" height="150"></canvas>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- ================== ANALYTICS & LOGS TAB ================== -->
+            <section class="tab-content hidden" id="tab-logs">
+                <div class="grid-2col">
+                    
+                    <!-- Left: Performance Metrics Charts -->
+                    <div class="panel glass-card flex-col">
+                        <div class="panel-header">
+                            <h2 class="panel-title"><i class="fa-solid fa-chart-line icon-cyan"></i>System Latency Tracker</h2>
+                            <button class="btn btn-secondary btn-sm" id="btn-clear-logs">
+                                <i class="fa-solid fa-rotate-left"></i> Reset Stats
+                            </button>
+                        </div>
+                        
+                        <div class="latency-chart-container">
+                            <!-- Custom CSS-drawn visual bars illustrating latency over the last 15 ticks -->
+                            <div class="latency-bars" id="latency-bars-chart">
+                                <!-- Bars will be added dynamically -->
+                            </div>
+                            <div class="chart-labels">
+                                <span>15 Ticks Ago</span>
+                                <span>Recent</span>
+                            </div>
+                        </div>
+                        
+                        <div class="inference-stats-grid">
+                            <div class="stat-box">
+                                <span class="stat-label">Min Latency</span>
+                                <span class="stat-number text-glow-cyan" id="stat-min-latency">0ms</span>
+                            </div>
+                            <div class="stat-box">
+                                <span class="stat-label">Average Latency</span>
+                                <span class="stat-number text-glow-purple" id="stat-avg-latency">0ms</span>
+                            </div>
+                            <div class="stat-box">
+                                <span class="stat-label">Max Latency</span>
+                                <span class="stat-number text-glow-magenta" id="stat-max-latency">0ms</span>
+                            </div>
+                            <div class="stat-box">
+                                <span class="stat-label">Total Predictions</span>
+                                <span class="stat-number text-glow-yellow" id="stat-total-pred">0</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Right: Historical Logs Table -->
+                    <div class="panel glass-card flex-col">
+                        <div class="panel-header">
+                            <h2 class="panel-title"><i class="fa-solid fa-list-ul icon-violet"></i>Classification Log History</h2>
+                            <button class="btn btn-secondary btn-sm" id="btn-export-csv">
+                                <i class="fa-solid fa-file-csv"></i> Export CSV
+                            </button>
+                        </div>
+                        
+                        <div class="table-container flex-grow">
+                            <table class="logs-table">
+                                <thead>
+                                    <tr>
+                                        <th>Timestamp</th>
+                                        <th>Target Source</th>
+                                        <th>Top Prediction</th>
+                                        <th>Confidence</th>
+                                        <th>Latency</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="logs-table-body">
+                                    <tr class="table-empty-row">
+                                        <td colspan="5">No classifications logged yet. Complete standard or custom runs.</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <!-- Global Batch Training Progress HUD -->
+    <div class="modal-overlay hidden" id="training-hud-modal">
+        <div class="modal-card glass-card text-center">
+            <div class="loader-spinner">
+                <i class="fa-solid fa-compact-disc fa-spin spinner-icon"></i>
+            </div>
+            <h3 id="training-hud-title">Tagging & Training Media</h3>
+            <p id="training-hud-description">Preparing activation vectors...</p>
+            <div class="progress-bar-wrapper">
+                <div class="progress-bar glow-cyan" id="training-hud-bar" style="width: 0%"></div>
+            </div>
+            <div class="progress-counter" id="training-hud-counter">0 / 0 Files</div>
+        </div>
+    </div>
+
+    <!-- Script Orchestration -->
+    <script src="classifier.js"></script>
+    <script src="ui.js"></script>
+    <script src="app.js"></script>
+</body>
+</html>
