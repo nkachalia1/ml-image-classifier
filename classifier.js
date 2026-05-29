@@ -13,6 +13,12 @@ const ClassifierEngine = {
     gradCAMSubModel: null,
     gradCAMLayerName: null,
     
+    activeModelId: 'mobilenet', // 'mobilenet', 'efficientnet', 'resnet', 'cocossd'
+    resnetModel: null,
+    efficientNetModel: null,
+    cocoSsdModel: null,
+    imagenetLabels: null,
+    
     // Status
     isLoaded: false,
     backend: 'cpu',
@@ -32,6 +38,15 @@ const ClassifierEngine = {
         try {
             // Wait for TFJS to be ready
             await tf.ready();
+            
+            // Load ImageNet labels for ResNet and EfficientNet-Lite mapping
+            try {
+                const response = await fetch('https://cdn.jsdelivr.net/gh/anishathalye/imagenet-simple-labels@master/imagenet-simple-labels.json');
+                this.imagenetLabels = await response.json();
+                console.log('[NeuralSight] ImageNet labels loaded successfully from CDN.');
+            } catch (err) {
+                console.error('[NeuralSight] Failed to load ImageNet labels from CDN:', err);
+            }
             
             // Set optimal backend (WebGL preferred, WASM fallback, CPU last)
             this.backend = tf.getBackend();
@@ -78,18 +93,173 @@ const ClassifierEngine = {
     },
 
     /**
+     * Load a model dynamically on demand
+     * @param {string} modelId
+     */
+    async loadModel(modelId) {
+        if (modelId === this.activeModelId) return;
+        
+        let targetLabel = '';
+        if (modelId === 'mobilenet') targetLabel = 'MobileNet';
+        else if (modelId === 'efficientnet') targetLabel = 'EfficientNet';
+        else if (modelId === 'resnet') targetLabel = 'ResNet';
+        else if (modelId === 'cocossd') targetLabel = 'COCO-SSD';
+        
+        this.updateStatus('model-status', 'loading', `${targetLabel}: Loading...`);
+        console.log(`[NeuralSight] Loading model dynamically: ${modelId}`);
+        
+        try {
+            if (modelId === 'mobilenet') {
+                // Already loaded during startup init()
+                this.activeModelId = 'mobilenet';
+                this.updateStatus('model-status', 'online', 'MobileNet: Ready');
+            } else if (modelId === 'efficientnet') {
+                if (!this.efficientNetModel) {
+                    this.efficientNetModel = await tflite.loadTFLiteModel('https://storage.googleapis.com/tfhub-litemodels/tensorflow/lite-model/efficientnet/lite0/fp32/2.tflite');
+                }
+                this.activeModelId = 'efficientnet';
+                this.updateStatus('model-status', 'online', 'EfficientNet: Ready');
+            } else if (modelId === 'resnet') {
+                if (!this.resnetModel) {
+                    this.resnetModel = await tf.loadLayersModel('https://raw.githubusercontent.com/paulsp94/tfjs_resnet_imagenet/master/ResNet50/model.json');
+                }
+                this.activeModelId = 'resnet';
+                this.updateStatus('model-status', 'online', 'ResNet: Ready');
+            } else if (modelId === 'cocossd') {
+                if (!this.cocoSsdModel) {
+                    this.cocoSsdModel = await cocoSsd.load();
+                }
+                this.activeModelId = 'cocossd';
+                this.updateStatus('model-status', 'online', 'COCO-SSD: Ready');
+            }
+            console.log(`[NeuralSight] Dynamic model ${modelId} successfully loaded.`);
+        } catch (error) {
+            console.error(`[NeuralSight] Failed to dynamically load model ${modelId}:`, error);
+            this.updateStatus('model-status', 'offline', `${targetLabel}: Load Failed`);
+            throw error;
+        }
+    },
+
+    /**
+     * Run inference using standard ResNet50
+     */
+    async predictResNet(element) {
+        if (!this.resnetModel) {
+            throw new Error('ResNet50 model is not loaded yet');
+        }
+        
+        const preprocessedCanvas = this.preprocessToCanvas(element);
+        
+        const predictions = tf.tidy(() => {
+            const tensor = tf.browser.fromPixels(preprocessedCanvas);
+            
+            // Standard Keras ImageNet preprocessing mean values (BGR subtraction)
+            const offset = tf.tensor1d([123.68, 116.779, 103.939]);
+            const preprocessed = tensor.toFloat().sub(offset).expandDims(0);
+            
+            const logits = this.resnetModel.predict(preprocessed);
+            const probabilities = tf.softmax(logits);
+            return probabilities.squeeze().dataSync();
+        });
+        
+        const predictionsWithIndices = Array.from(predictions).map((prob, index) => ({
+            probability: prob,
+            index: index
+        }));
+        
+        predictionsWithIndices.sort((a, b) => b.probability - a.probability);
+        
+        const top3 = predictionsWithIndices.slice(0, 3).map(pred => {
+            const className = this.imagenetLabels ? this.imagenetLabels[pred.index] : `Class ${pred.index}`;
+            return {
+                className: className,
+                probability: pred.probability
+            };
+        });
+        
+        return top3;
+    },
+
+    /**
+     * Run inference using EfficientNet-Lite0
+     */
+    async predictEfficientNet(element) {
+        if (!this.efficientNetModel) {
+            throw new Error('EfficientNet-Lite model is not loaded yet');
+        }
+        
+        const preprocessedCanvas = this.preprocessToCanvas(element);
+        
+        const predictions = tf.tidy(() => {
+            const tensor = tf.browser.fromPixels(preprocessedCanvas);
+            
+            // Normalize inputs to range [-1, 1] for EfficientNet-Lite FP32: (val - 127.0) / 128.0
+            const normalized = tensor.toFloat().sub(127.0).div(128.0).expandDims(0);
+            const logits = this.efficientNetModel.predict(normalized);
+            const probabilities = tf.softmax(logits);
+            return probabilities.squeeze().dataSync();
+        });
+        
+        const predictionsWithIndices = Array.from(predictions).map((prob, index) => ({
+            probability: prob,
+            index: index
+        }));
+        
+        predictionsWithIndices.sort((a, b) => b.probability - a.probability);
+        
+        // EfficientNet-Lite has 1001 classes (index 0 is dummy background class, 1-1000 map to ImageNet)
+        const top3 = predictionsWithIndices
+            .filter(pred => pred.index > 0)
+            .slice(0, 3)
+            .map(pred => {
+                const labelIndex = pred.index - 1;
+                const className = this.imagenetLabels ? this.imagenetLabels[labelIndex] : `Class ${pred.index}`;
+                return {
+                    className: className,
+                    probability: pred.probability
+                };
+            });
+        
+        return top3;
+    },
+
+    /**
+     * Run inference using COCO-SSD
+     */
+    async predictCocoSsd(element) {
+        if (!this.cocoSsdModel) {
+            throw new Error('COCO-SSD model is not loaded yet');
+        }
+        return await this.cocoSsdModel.detect(element);
+    },
+
+    /**
      * Predict labels on an image or video element using standard MobileNet
      * @param {HTMLImageElement|HTMLVideoElement|HTMLCanvasElement} element 
      * @returns {Promise<Array>} List of predictions with className and probability
      */
     async predictStandard(element) {
-        if (!this.isLoaded || !this.mobileNetModel) {
-            throw new Error('MobileNet model is not loaded yet');
+        if (!this.isLoaded) {
+            throw new Error('Classifier engine is not initialized');
         }
         
-        // MobileNet.classify automatically handles canvas preprocessing
-        const predictions = await this.mobileNetModel.classify(element, 3);
-        return predictions;
+        if (this.activeModelId === 'mobilenet') {
+            if (!this.mobileNetModel) throw new Error('MobileNet model is not loaded yet');
+            return await this.mobileNetModel.classify(element, 3);
+        } else if (this.activeModelId === 'efficientnet') {
+            return await this.predictEfficientNet(element);
+        } else if (this.activeModelId === 'resnet') {
+            return await this.predictResNet(element);
+        } else if (this.activeModelId === 'cocossd') {
+            const detections = await this.predictCocoSsd(element);
+            return detections.map(pred => ({
+                className: pred.class,
+                probability: pred.score,
+                bbox: pred.bbox
+            }));
+        }
+        
+        throw new Error(`Unsupported active model: ${this.activeModelId}`);
     },
 
     // Offscreen Canvas for persistent, clean pre-processing resizing

@@ -51,6 +51,7 @@ const UIManager = {
     init() {
         this.bindTabs();
         this.bindSources();
+        this.bindModelSelection();
         this.bindWebcam();
         this.bindFileUploads();
         this.bindCustomClasses();
@@ -97,10 +98,11 @@ const UIManager = {
      * Switch input sources: Live Webcam, Upload file, Gallery presets
      */
     bindSources() {
-        const pills = document.querySelectorAll('.selector-pill');
+        const pills = document.querySelectorAll('.selector-pill:not([data-model])');
         pills.forEach(pill => {
             pill.addEventListener('click', () => {
                 const source = pill.getAttribute('data-source');
+                if (!source) return;
                 
                 // CSS toggling
                 pills.forEach(p => p.classList.remove('active'));
@@ -117,11 +119,16 @@ const UIManager = {
                 
                 // Reset predictions when switching sources
                 this.resetPredictionOutput();
+                this.clearAllOverlays();
                 
                 if (source === 'webcam') {
                     this.startWebcam();
                 } else {
                     this.stopWebcam();
+                    
+                    if (source === 'gallery') {
+                        this.clearGalleryPreview();
+                    }
                 }
             });
         });
@@ -135,7 +142,20 @@ const UIManager = {
                 
                 const imgUrl = card.getAttribute('data-url');
                 this.loadPresetImage(imgUrl);
+                
+                // Show preset preview page beautifully
+                const previewImg = document.getElementById('gallery-preview');
+                previewImg.src = imgUrl;
+                
+                document.getElementById('gallery-grid-container').classList.add('hidden');
+                document.getElementById('gallery-preview-container').classList.remove('hidden');
             });
+        });
+
+        // Bind Gallery preview back button
+        const clearGalleryBtn = document.getElementById('btn-clear-gallery');
+        clearGalleryBtn.addEventListener('click', () => {
+            this.clearGalleryPreview();
         });
     },
 
@@ -280,6 +300,7 @@ const UIManager = {
         document.getElementById('upload-preview-container').classList.add('hidden');
         document.getElementById('drop-zone').classList.remove('hidden');
         this.resetPredictionOutput();
+        this.clearAllOverlays();
         console.log('[NeuralSight] Cleared user uploaded image.');
     },
 
@@ -301,8 +322,18 @@ const UIManager = {
     /**
      * Render prediction states
      */
-    drawPredictions(predictions, latency) {
-        if (!predictions || predictions.length === 0) return;
+    drawPredictions(predictions, latency, elementToClassify) {
+        if (!predictions || predictions.length === 0) {
+            this.clearAllOverlays();
+            return;
+        }
+        
+        // Draw COCO-SSD bounding box overlays
+        if (ClassifierEngine.activeModelId === 'cocossd' && elementToClassify) {
+            this.drawBoundingBoxes(predictions, elementToClassify);
+        } else {
+            this.clearAllOverlays();
+        }
         
         // Measure FPS and latency
         this.logLatencyMetrics(latency);
@@ -1571,6 +1602,144 @@ const UIManager = {
 
     updateCaptionOutput(htmlContent) {
         document.getElementById('caption-output').innerHTML = htmlContent;
+    },
+
+    /**
+     * Bind AI model selector events
+     */
+    bindModelSelection() {
+        const pills = document.querySelectorAll('#model-selector-pills .selector-pill');
+        pills.forEach(pill => {
+            pill.addEventListener('click', async () => {
+                if (pill.classList.contains('active')) return;
+                
+                const modelId = pill.getAttribute('data-model');
+                
+                // Switch pills CSS visually
+                pills.forEach(p => p.classList.remove('active'));
+                pill.classList.add('active');
+                
+                try {
+                    // Instantly wipe existing canvas overlays
+                    this.clearAllOverlays();
+                    
+                    // Load chosen model dynamically
+                    await ClassifierEngine.loadModel(modelId);
+                    
+                    // Reset prediction outputs to await new model predictions
+                    this.resetPredictionOutput();
+                    console.log(`[NeuralSight] Successfully loaded and switched active AI Model to: ${modelId}`);
+                } catch (err) {
+                    console.error('[NeuralSight] Failed to dynamically switch AI architectures:', err);
+                    alert(`Inference Engine Switch Failed: Could not load the ${modelId} model.`);
+                }
+            });
+        });
+    },
+
+    /**
+     * Resets gallery view, hiding the preview container and resetting metrics
+     */
+    clearGalleryPreview() {
+        this.activeImageElement = null;
+        const previewContainer = document.getElementById('gallery-preview-container');
+        const gridContainer = document.getElementById('gallery-grid-container');
+        
+        if (previewContainer) previewContainer.classList.add('hidden');
+        if (gridContainer) gridContainer.classList.remove('hidden');
+        
+        document.getElementById('gallery-preview').src = '';
+        
+        const galleryCards = document.querySelectorAll('.gallery-card');
+        galleryCards.forEach(c => c.classList.remove('selected'));
+        
+        this.resetPredictionOutput();
+        this.clearAllOverlays();
+        console.log('[NeuralSight] Exited preset gallery preview mode.');
+    },
+
+    /**
+     * Clears all overlay canvases in the viewports
+     */
+    clearAllOverlays() {
+        const overlays = ['webcam-overlay', 'upload-overlay', 'gallery-overlay'];
+        overlays.forEach(id => {
+            const canvas = document.getElementById(id);
+            if (canvas) {
+                const ctx = canvas.getContext('2d');
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+            }
+        });
+    },
+
+    /**
+     * Renders neon cyan bounding box HUD overlays for COCO-SSD object detections
+     */
+    drawBoundingBoxes(predictions, element) {
+        let canvasId = '';
+        if (this.activeSource === 'webcam') canvasId = 'webcam-overlay';
+        else if (this.activeSource === 'upload') canvasId = 'upload-overlay';
+        else if (this.activeSource === 'gallery') canvasId = 'gallery-overlay';
+        
+        const canvas = document.getElementById(canvasId);
+        if (!canvas) return;
+        
+        const ctx = canvas.getContext('2d');
+        
+        // Sync coordinate space dimensions of overlay canvas with the source element
+        const elementWidth = element.videoWidth || element.naturalWidth || element.width || canvas.clientWidth;
+        const elementHeight = element.videoHeight || element.naturalHeight || element.height || canvas.clientHeight;
+        
+        if (canvas.width !== elementWidth || canvas.height !== elementHeight) {
+            canvas.width = elementWidth;
+            canvas.height = elementHeight;
+        }
+        
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        
+        if (!predictions || predictions.length === 0) return;
+        
+        const isWebcam = (this.activeSource === 'webcam');
+        
+        predictions.forEach(pred => {
+            if (!pred.bbox) return;
+            const [x, y, width, height] = pred.bbox;
+            const score = Math.round(pred.probability * 100);
+            const className = pred.className;
+            
+            // horizontal webcam mirroring math to avoid backward text
+            const drawX = isWebcam ? (elementWidth - x - width) : x;
+            
+            // Draw Neon Bounding Box
+            ctx.strokeStyle = 'hsla(187, 92%, 53%, 0.85)';
+            ctx.lineWidth = Math.max(2, Math.round(elementWidth / 200));
+            ctx.strokeRect(drawX, y, width, height);
+            
+            // Bounding Box glow drop-shadow
+            ctx.strokeStyle = 'rgba(187, 92, 53, 0.15)';
+            ctx.lineWidth = Math.max(6, Math.round(elementWidth / 80));
+            ctx.strokeRect(drawX, y, width, height);
+            
+            // Label box scaling
+            const fontSize = Math.max(10, Math.round(elementWidth / 40));
+            ctx.font = `700 ${fontSize}px "JetBrains Mono"`;
+            const labelText = `${className} (${score}%)`;
+            const textWidth = ctx.measureText(labelText).width;
+            const padding = Math.max(4, Math.round(fontSize / 3));
+            const bannerHeight = fontSize + padding * 2;
+            
+            // Label box background
+            ctx.fillStyle = 'rgba(7, 10, 19, 0.85)';
+            ctx.fillRect(drawX, y - bannerHeight, textWidth + padding * 2, bannerHeight);
+            
+            ctx.strokeStyle = 'hsla(187, 92%, 53%, 0.5)';
+            ctx.lineWidth = 1;
+            ctx.strokeRect(drawX, y - bannerHeight, textWidth + padding * 2, bannerHeight);
+            
+            // Draw text tag
+            ctx.fillStyle = '#ffffff';
+            ctx.fillText(labelText, drawX + padding, y - padding);
+        });
     }
 };
 

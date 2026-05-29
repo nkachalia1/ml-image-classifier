@@ -240,7 +240,7 @@ const App = {
                     }
                     
                     const latency = Math.round(performance.now() - startTime);
-                    UIManager.drawPredictions(predictions, latency);
+                    UIManager.drawPredictions(predictions, latency, elementToClassify);
                 } catch (e) {
                     console.error('[NeuralSight] Standard classification failed:', e);
                 } finally {

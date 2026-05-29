@@ -22,6 +22,9 @@
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.17.0/dist/tf.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/mobilenet@2.1.0/dist/mobilenet.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/knn-classifier@1.2.4/dist/knn-classifier.min.js"></script>
+    <!-- Object Detection & TFLite Runtimes -->
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.3/dist/coco-ssd.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-tflite@0.0.1-alpha.10/dist/tf-tflite.min.js"></script>
     <!-- Transformers.js CDN for in-browser Local AI Image Captioning -->
     <script src="https://cdn.jsdelivr.net/npm/@xenova/transformers@2.17.2/dist/transformers.min.js"></script>
 </head>
@@ -102,6 +105,25 @@
                                 <i class="fa-solid fa-images"></i> Presets
                             </button>
                         </div>
+
+                        <!-- Model Architecture Selection -->
+                        <div class="panel-header" style="margin-top: 18px; margin-bottom: 12px; padding-bottom: 8px;">
+                            <h2 class="panel-title"><i class="fa-solid fa-microchip icon-cyan"></i>Active AI Model</h2>
+                        </div>
+                        <div class="selector-pills" id="model-selector-pills">
+                            <button class="selector-pill active" data-model="mobilenet" id="model-mobilenet-btn" title="MobileNet v1">
+                                <i class="fa-solid fa-network-wired"></i> MobileNet
+                            </button>
+                            <button class="selector-pill" data-model="efficientnet" id="model-efficientnet-btn" title="EfficientNet-Lite0 TFLite">
+                                <i class="fa-solid fa-bolt-lightning"></i> EfficientNet-Lite
+                            </button>
+                            <button class="selector-pill" data-model="resnet" id="model-resnet-btn" title="ResNet50 LayersModel">
+                                <i class="fa-solid fa-layer-group"></i> ResNet
+                            </button>
+                            <button class="selector-pill" data-model="cocossd" id="model-cocossd-btn" title="COCO-SSD Object Detection">
+                                <i class="fa-solid fa-expand"></i> COCO-SSD
+                            </button>
+                        </div>
                         
                         <!-- Webcam Viewport -->
                         <div class="viewport-wrapper" id="webcam-viewport">
@@ -128,6 +150,7 @@
                             </div>
                             <div class="preview-zone hidden" id="upload-preview-container">
                                 <img id="upload-preview" alt="User Upload Preview">
+                                <canvas id="upload-overlay" class="overlay-canvas"></canvas>
                                 <button class="btn-clear" id="btn-clear-upload">
                                     <i class="fa-solid fa-times"></i>
                                 </button>
@@ -136,7 +159,7 @@
 
                         <!-- Gallery Presets Viewport -->
                         <div class="viewport-wrapper hidden" id="gallery-viewport">
-                            <div class="gallery-grid">
+                            <div class="gallery-grid" id="gallery-grid-container">
                                 <div class="gallery-card" data-url="https://images.unsplash.com/photo-1543466835-00a7907e9de1?auto=format&fit=crop&q=80&w=400">
                                     <img src="https://images.unsplash.com/photo-1543466835-00a7907e9de1?auto=format&fit=crop&q=80&w=200" alt="Dog">
                                     <span>Golden Retriever</span>
@@ -161,6 +184,13 @@
                                     <img src="https://images.unsplash.com/photo-1564013799919-ab600027ffc6?auto=format&fit=crop&q=80&w=200" alt="House">
                                     <span>Modern House</span>
                                 </div>
+                            </div>
+                            <div class="preview-zone hidden" id="gallery-preview-container">
+                                <img id="gallery-preview" alt="Gallery Preset Preview">
+                                <canvas id="gallery-overlay" class="overlay-canvas"></canvas>
+                                <button class="btn-clear" id="btn-clear-gallery" title="Back to Presets" style="left: 12px; right: auto;">
+                                    <i class="fa-solid fa-arrow-left"></i>
+                                </button>
                             </div>
                         </div>
                     </div>
