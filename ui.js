@@ -122,7 +122,7 @@ const UIManager = {
                 this.clearAllOverlays();
                 
                 if (source === 'webcam') {
-                    this.startWebcam();
+                    this.syncTabWebcams();
                 } else {
                     this.stopWebcam();
                     
@@ -204,14 +204,33 @@ const UIManager = {
         console.log('[NeuralSight] Webcam feed stopped.');
     },
 
-    syncTabWebcams() {
+    async syncTabWebcams() {
         // Stop cameras if user navigates to Analytics, reactivate for classifier and X-Ray tabs
         const needsWebcam = (this.activeTab === 'tab-standard' && this.activeSource === 'webcam') || 
                             (this.activeTab === 'tab-custom') || 
                             (this.activeTab === 'tab-xray' && this.activeSource === 'webcam');
                             
         if (needsWebcam) {
-            this.startWebcam();
+            await this.startWebcam();
+            
+            // Determine the active video element for the current tab
+            let activeVideo = null;
+            if (this.activeTab === 'tab-standard' && this.activeSource === 'webcam') {
+                activeVideo = document.getElementById('webcam');
+            } else if (this.activeTab === 'tab-custom') {
+                activeVideo = document.getElementById('custom-feed-video');
+            } else if (this.activeTab === 'tab-xray' && this.activeSource === 'webcam') {
+                activeVideo = document.getElementById('xray-webcam');
+            }
+            
+            if (activeVideo && this.stream) {
+                if (activeVideo.srcObject !== this.stream) {
+                    activeVideo.srcObject = this.stream;
+                }
+                activeVideo.play().catch(err => {
+                    console.warn('[NeuralSight] Play failed for video element:', activeVideo.id, err);
+                });
+            }
         } else {
             // Wait brief moment before stopping to allow layout to settle
             setTimeout(() => {

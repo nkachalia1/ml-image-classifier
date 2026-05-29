@@ -115,6 +115,7 @@ const ClassifierEngine = {
                 this.updateStatus('model-status', 'online', 'MobileNet: Ready');
             } else if (modelId === 'efficientnet') {
                 if (!this.efficientNetModel) {
+                    tflite.setWasmPath('https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-tflite@0.0.1-alpha.10/dist/');
                     this.efficientNetModel = await tflite.loadTFLiteModel('https://storage.googleapis.com/tfhub-litemodels/tensorflow/lite-model/efficientnet/lite0/fp32/2.tflite');
                 }
                 this.activeModelId = 'efficientnet';
@@ -157,7 +158,15 @@ const ClassifierEngine = {
             const offset = tf.tensor1d([123.68, 116.779, 103.939]);
             const preprocessed = tensor.toFloat().sub(offset).expandDims(0);
             
-            const logits = this.resnetModel.predict(preprocessed);
+            let logits = this.resnetModel.predict(preprocessed);
+            if (Array.isArray(logits) && logits.length > 0) {
+                logits = logits[0];
+            } else if (logits && typeof logits === 'object' && !(logits instanceof tf.Tensor)) {
+                const keys = Object.keys(logits);
+                if (keys.length > 0) {
+                    logits = logits[keys[0]];
+                }
+            }
             const probabilities = tf.softmax(logits);
             return probabilities.squeeze().dataSync();
         });
@@ -195,7 +204,15 @@ const ClassifierEngine = {
             
             // Normalize inputs to range [-1, 1] for EfficientNet-Lite FP32: (val - 127.0) / 128.0
             const normalized = tensor.toFloat().sub(127.0).div(128.0).expandDims(0);
-            const logits = this.efficientNetModel.predict(normalized);
+            let logits = this.efficientNetModel.predict(normalized);
+            if (Array.isArray(logits) && logits.length > 0) {
+                logits = logits[0];
+            } else if (logits && typeof logits === 'object' && !(logits instanceof tf.Tensor)) {
+                const keys = Object.keys(logits);
+                if (keys.length > 0) {
+                    logits = logits[keys[0]];
+                }
+            }
             const probabilities = tf.softmax(logits);
             return probabilities.squeeze().dataSync();
         });
