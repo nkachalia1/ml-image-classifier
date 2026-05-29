@@ -183,15 +183,20 @@ const UIManager = {
     },
 
     syncTabWebcams() {
-        // Stop cameras if user navigates to X-Ray or Analytics, reactivate for classifier tabs
-        if (this.activeTab === 'tab-standard' && this.activeSource === 'webcam') {
-            this.startWebcam();
-        } else if (this.activeTab === 'tab-custom') {
+        // Stop cameras if user navigates to Analytics, reactivate for classifier and X-Ray tabs
+        const needsWebcam = (this.activeTab === 'tab-standard' && this.activeSource === 'webcam') || 
+                            (this.activeTab === 'tab-custom') || 
+                            (this.activeTab === 'tab-xray' && this.activeSource === 'webcam');
+                            
+        if (needsWebcam) {
             this.startWebcam();
         } else {
             // Wait brief moment before stopping to allow layout to settle
             setTimeout(() => {
-                if (this.activeTab !== 'tab-standard' && this.activeTab !== 'tab-custom') {
+                const stillNeedsWebcam = (this.activeTab === 'tab-standard' && this.activeSource === 'webcam') || 
+                                         (this.activeTab === 'tab-custom') || 
+                                         (this.activeTab === 'tab-xray' && this.activeSource === 'webcam');
+                if (!stillNeedsWebcam) {
                     this.stopWebcam();
                 }
             }, 100);
