@@ -13,9 +13,8 @@ const ClassifierEngine = {
     gradCAMSubModel: null,
     gradCAMLayerName: null,
     
-    activeModelId: 'mobilenet', // 'mobilenet', 'efficientnet', 'resnet', 'cocossd'
+    activeModelId: 'mobilenet', // 'mobilenet', 'resnet', 'cocossd'
     resnetModel: null,
-    efficientNetModel: null,
     cocoSsdModel: null,
     imagenetLabels: null,
     
@@ -39,7 +38,7 @@ const ClassifierEngine = {
             // Wait for TFJS to be ready
             await tf.ready();
             
-            // Load ImageNet labels for ResNet and EfficientNet-Lite mapping
+            // Load ImageNet labels for ResNet mapping
             try {
                 const response = await fetch('https://cdn.jsdelivr.net/gh/anishathalye/imagenet-simple-labels@master/imagenet-simple-labels.json');
                 this.imagenetLabels = await response.json();
@@ -60,9 +59,9 @@ const ClassifierEngine = {
             // Load MobileNet
             this.updateStatus('model-status', 'loading', 'MobileNet: Loading...');
             
-            // Loading MobileNet v1 with 1.0 alpha multiplier and 224px input size
+            // Loading MobileNet v2 with 1.0 alpha multiplier and 224px input size
             this.mobileNetModel = await mobilenet.load({
-                version: 1,
+                version: 2,
                 alpha: 1.0
             });
             
@@ -70,7 +69,7 @@ const ClassifierEngine = {
             await this.initGradCAM();
             
             this.isLoaded = true;
-            console.log('[NeuralSight] MobileNet v1 model loaded successfully.');
+            console.log('[NeuralSight] MobileNet v2 model loaded successfully.');
             this.updateStatus('model-status', 'online', 'MobileNet: Ready');
             
             if (this.onModelLoad) {
@@ -101,7 +100,6 @@ const ClassifierEngine = {
         
         let targetLabel = '';
         if (modelId === 'mobilenet') targetLabel = 'MobileNet';
-        else if (modelId === 'efficientnet') targetLabel = 'EfficientNet';
         else if (modelId === 'resnet') targetLabel = 'ResNet';
         else if (modelId === 'cocossd') targetLabel = 'COCO-SSD';
         
@@ -113,13 +111,6 @@ const ClassifierEngine = {
                 // Already loaded during startup init()
                 this.activeModelId = 'mobilenet';
                 this.updateStatus('model-status', 'online', 'MobileNet: Ready');
-            } else if (modelId === 'efficientnet') {
-                if (!this.efficientNetModel) {
-                    tflite.setWasmPath('https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-tflite@0.0.1-alpha.10/dist/');
-                    this.efficientNetModel = await tflite.loadTFLiteModel('https://storage.googleapis.com/tfhub-litemodels/tensorflow/lite-model/efficientnet/lite0/fp32/2.tflite');
-                }
-                this.activeModelId = 'efficientnet';
-                this.updateStatus('model-status', 'online', 'EfficientNet: Ready');
             } else if (modelId === 'resnet') {
                 if (!this.resnetModel) {
                     this.resnetModel = await tf.loadLayersModel('https://raw.githubusercontent.com/paulsp94/tfjs_resnet_imagenet/master/ResNet50/model.json');
@@ -189,56 +180,7 @@ const ClassifierEngine = {
         return top3;
     },
 
-    /**
-     * Run inference using EfficientNet-Lite0
-     */
-    async predictEfficientNet(element) {
-        if (!this.efficientNetModel) {
-            throw new Error('EfficientNet-Lite model is not loaded yet');
-        }
-        
-        const preprocessedCanvas = this.preprocessToCanvas(element);
-        
-        const predictions = tf.tidy(() => {
-            const tensor = tf.browser.fromPixels(preprocessedCanvas);
-            
-            // Normalize inputs to range [-1, 1] for EfficientNet-Lite FP32: (val - 127.0) / 128.0
-            const normalized = tensor.toFloat().sub(127.0).div(128.0).expandDims(0);
-            let logits = this.efficientNetModel.predict(normalized);
-            if (Array.isArray(logits) && logits.length > 0) {
-                logits = logits[0];
-            } else if (logits && typeof logits === 'object' && !(logits instanceof tf.Tensor)) {
-                const keys = Object.keys(logits);
-                if (keys.length > 0) {
-                    logits = logits[keys[0]];
-                }
-            }
-            const probabilities = tf.softmax(logits);
-            return probabilities.squeeze().dataSync();
-        });
-        
-        const predictionsWithIndices = Array.from(predictions).map((prob, index) => ({
-            probability: prob,
-            index: index
-        }));
-        
-        predictionsWithIndices.sort((a, b) => b.probability - a.probability);
-        
-        // EfficientNet-Lite has 1001 classes (index 0 is dummy background class, 1-1000 map to ImageNet)
-        const top3 = predictionsWithIndices
-            .filter(pred => pred.index > 0)
-            .slice(0, 3)
-            .map(pred => {
-                const labelIndex = pred.index - 1;
-                const className = this.imagenetLabels ? this.imagenetLabels[labelIndex] : `Class ${pred.index}`;
-                return {
-                    className: className,
-                    probability: pred.probability
-                };
-            });
-        
-        return top3;
-    },
+
 
     /**
      * Run inference using COCO-SSD
@@ -263,8 +205,6 @@ const ClassifierEngine = {
         if (this.activeModelId === 'mobilenet') {
             if (!this.mobileNetModel) throw new Error('MobileNet model is not loaded yet');
             return await this.mobileNetModel.classify(element, 3);
-        } else if (this.activeModelId === 'efficientnet') {
-            return await this.predictEfficientNet(element);
         } else if (this.activeModelId === 'resnet') {
             return await this.predictResNet(element);
         } else if (this.activeModelId === 'cocossd') {
@@ -359,11 +299,11 @@ const ClassifierEngine = {
         this.augmentAndTrain(element, classId);
         
         this.updateNumClasses();
-        console.log(`[NeuralSight] Recorded sample and 4 augmented vectors for class '${className}' (ID: ${classId})`);
+        console.log(`[NeuralSight] Recorded sample and 6 augmented vectors for class '${className}' (ID: ${classId})`);
     },
 
     /**
-     * Creates 4 visual augmentations on offscreen canvas and registers them into the KNN classifier dataset
+     * Creates 6 visual augmentations on offscreen canvas and registers them into the KNN classifier dataset
      */
     augmentAndTrain(element, classId) {
         const canvas = this.getOffscreenCanvas();
@@ -424,6 +364,24 @@ const ClassifierEngine = {
         ctx.drawImage(element, sx, sy, minDim, minDim, 0, 0, 224, 224);
         ctx.restore();
         registerAugmented();
+        
+        // Augmentation 5: Zoom/Crop 1.15x (Scale/distance invariance)
+        ctx.clearRect(0, 0, 224, 224);
+        ctx.save();
+        const zoomDim = minDim * 0.85;
+        const zsx = sx + (minDim - zoomDim) / 2;
+        const zsy = sy + (minDim - zoomDim) / 2;
+        ctx.drawImage(element, zsx, zsy, zoomDim, zoomDim, 0, 0, 224, 224);
+        ctx.restore();
+        registerAugmented();
+        
+        // Augmentation 6: Dimmer Lighting (Low-light variation invariance)
+        ctx.clearRect(0, 0, 224, 224);
+        ctx.save();
+        ctx.filter = 'brightness(0.8) contrast(0.9)';
+        ctx.drawImage(element, sx, sy, minDim, minDim, 0, 0, 224, 224);
+        ctx.restore();
+        registerAugmented();
     },
 
     /**
@@ -439,8 +397,12 @@ const ClassifierEngine = {
         const activation = this.getActivation(element);
         
         try {
+            const dataset = this.knnClassifierInstance.getClassifierDataset();
+            const totalExamples = Object.values(dataset).reduce((sum, t) => sum + t.shape[0], 0);
+            const k = Math.min(5, Math.max(1, Math.floor(totalExamples / 3)));
+
             // Predict label using k-Nearest Neighbors clustering
-            const result = await this.knnClassifierInstance.predictClass(activation);
+            const result = await this.knnClassifierInstance.predictClass(activation, k);
             
             // Calculate cosine similarity between query activation and trained datasets
             const queryVal = activation.dataSync();
@@ -452,7 +414,6 @@ const ClassifierEngine = {
             }
             queryNorm = Math.sqrt(queryNorm);
             
-            const dataset = this.knnClassifierInstance.getClassifierDataset();
             const predictionsList = [];
             const confidences = result.confidences; // Key: classId, Value: probability [0-1]
             

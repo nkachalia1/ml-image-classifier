@@ -63,15 +63,15 @@ Since the project operates as a static site powered by CDN dependencies, running
 
 ## 🧠 Behind the Machine Learning
 
-### 1. Pre-trained Inference (MobileNet v1)
-MobileNet is a class of efficient convolutional neural networks designed for mobile and embedded vision applications. NeuralSight loads the 100% parameter MobileNet v1 model. When an image is supplied, it is squeezed down to a `224x224` tensor, normalized between `-1.0` and `1.0`, and convolved through layers to map against 1000 categories from the ImageNet database.
+### 1. Pre-trained Inference (MobileNet v2)
+MobileNet is a class of efficient convolutional neural networks designed for mobile and embedded vision applications. NeuralSight loads the MobileNet v2 model. When an image is supplied, it is squeezed down to a `224x224` tensor, normalized between `-1.0` and `1.0`, and convolved through layers to map against 1000 categories from the ImageNet database.
 
 ### 2. Transfer Learning (KNN Classifier)
 Rather than retraining millions of network weights (which requires high-end servers), we use **Feature Extraction (Transfer Learning)**:
-- We pass your input feed through MobileNet, but stop at the final pre-classification activation layer (`conv_preds`).
-- This returns a dense **1024-dimensional feature vector** representing highly optimized features (shapes, curves, textures) detected by the network.
-- When you click "Record Example", we save this 1024-dimensional vector and map it to your custom text label.
-- During custom prediction, we pass the webcam frame through MobileNet to extract its vector, and run a **k-Nearest Neighbors (k=10)** classification. It maps the vector to the closest clustering class and outputs confidence probabilities!
+- We pass your input feed through MobileNet, but stop at the final pre-classification activation layer.
+- This returns a dense **1280-dimensional feature vector** representing highly optimized features (shapes, curves, textures) detected by the network.
+- When you click "Record Example", we save this vector and automatically generate **6 augmented vectors** (incorporating horizontal mirroring, rotations, brightness shifts, scale zoom/crop, and low-light variations) to enforce robust visual invariance.
+- During custom prediction, we pass the webcam frame through MobileNet to extract its vector, and run a **k-Nearest Neighbors (KNN)** classification with a dynamically adjusted value of `k` based on dataset size for optimal robustness. It maps the vector to the closest clustering class and outputs confidence probabilities!
 
 ### 3. Edge Detection Matrix Math (Sobel Filter)
 In the X-Ray tab, Sobel Edge Detection is implemented via canvas pixel math:
