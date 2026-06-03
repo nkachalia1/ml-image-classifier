@@ -461,6 +461,12 @@ body {
     display: none;
 }
 
+#webcam-viewport {
+    max-width: 420px;
+    margin-left: auto;
+    margin-right: auto;
+}
+
 .feed-element {
     width: 100%;
     height: 100%;
