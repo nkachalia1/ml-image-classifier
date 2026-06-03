@@ -408,9 +408,17 @@ const ClassifierEngine = {
             const queryVal = activation.dataSync();
             const vectorLength = queryVal.length; // Dynamically grab model flat features count
             
+            let queryMean = 0;
+            for (let i = 0; i < vectorLength; i++) {
+                queryMean += queryVal[i];
+            }
+            queryMean /= vectorLength;
+            
+            const queryZeroMean = new Float32Array(vectorLength);
             let queryNorm = 0;
             for (let i = 0; i < vectorLength; i++) {
-                queryNorm += queryVal[i] * queryVal[i];
+                queryZeroMean[i] = queryVal[i] - queryMean;
+                queryNorm += queryZeroMean[i] * queryZeroMean[i];
             }
             queryNorm = Math.sqrt(queryNorm);
             
@@ -427,14 +435,20 @@ const ClassifierEngine = {
                     
                     // Loop over each training sample's feature slice
                     for (let ex = 0; ex < numExamples; ex++) {
-                        let dotProduct = 0;
-                        let exNorm = 0;
                         const offset = ex * vectorLength;
                         
+                        let exMean = 0;
                         for (let i = 0; i < vectorLength; i++) {
-                            const val = classVal[offset + i];
-                            dotProduct += queryVal[i] * val;
-                            exNorm += val * val;
+                            exMean += classVal[offset + i];
+                        }
+                        exMean /= vectorLength;
+                        
+                        let dotProduct = 0;
+                        let exNorm = 0;
+                        for (let i = 0; i < vectorLength; i++) {
+                            const valZeroMean = classVal[offset + i] - exMean;
+                            dotProduct += queryZeroMean[i] * valZeroMean;
+                            exNorm += valZeroMean * valZeroMean;
                         }
                         
                         exNorm = Math.sqrt(exNorm);
@@ -447,15 +461,15 @@ const ClassifierEngine = {
                 }
                 
                 // SOFT THRESHOLDING SIMILARITY SCALE:
-                // Cosine similarity < 0.81 is treated as completely unrelated (zeroed out).
-                // Cosine similarity >= 0.88 is treated as fully resembled (full confidence).
+                // Cosine similarity < 0.975 is treated as completely unrelated (zeroed out).
+                // Cosine similarity >= 0.990 is treated as fully resembled (full confidence).
                 // In between, we smoothly interpolate. This prevents sudden overlaps.
                 let probability = confidences[id];
-                if (maxSimilarity < 0.81) {
+                if (maxSimilarity < 0.975) {
                     probability = 0.0;
-                } else if (maxSimilarity < 0.88) {
+                } else if (maxSimilarity < 0.990) {
                     // Smooth linear interpolation multiplier
-                    const scale = (maxSimilarity - 0.81) / (0.88 - 0.81);
+                    const scale = (maxSimilarity - 0.975) / (0.990 - 0.975);
                     probability = confidences[id] * scale;
                 }
                 
