@@ -35,10 +35,12 @@ const ClassifierEngine = {
     minCustomClassesForPrediction: 2,
     customUnknownSimilarityFloor: 0.985,
     customFullConfidenceSimilarity: 0.995,
-    customStandardActivationFloor: 0.93,
+    customStandardActivationFloor: 0.88,
     customStandardStillFloor: 0.96,
-    customStandardActivationMargin: 0.018,
-    customStandardBaselineAlpha: 0.04,
+    customStandardActivationMargin: 0.012,
+    customStandardReentryMargin: 0.014,
+    customStandardBaselineAlpha: 0.025,
+    customStandardBaselineDownAlpha: 0.75,
     customStandardState: {},
     customScanCanvas: null,
     customScanCtx: null,
@@ -466,12 +468,17 @@ const ClassifierEngine = {
             makeCrop('full', 1.0, 0.5, 0.5),
             makeCrop('center', 0.72, 0.5, 0.5),
             makeCrop('center-tight', 0.48, 0.5, 0.5),
+            makeCrop('center-detail', 0.34, 0.5, 0.5),
             makeCrop('left', 0.62, 0.32, 0.5),
             makeCrop('right', 0.62, 0.68, 0.5),
+            makeCrop('mid-left', 0.42, 0.35, 0.5),
+            makeCrop('mid-right', 0.42, 0.65, 0.5),
             makeCrop('upper', 0.56, 0.5, 0.34),
             makeCrop('lower', 0.56, 0.5, 0.66),
             makeCrop('upper-left', 0.52, 0.33, 0.35),
-            makeCrop('upper-right', 0.52, 0.67, 0.35)
+            makeCrop('upper-right', 0.52, 0.67, 0.35),
+            makeCrop('lower-left', 0.46, 0.35, 0.68),
+            makeCrop('lower-right', 0.46, 0.65, 0.68)
         ];
     },
 
@@ -591,12 +598,12 @@ const ClassifierEngine = {
         activation.dispose();
         
         // 2. Perform Mathematical Data Augmentation in-browser
-        // Spawns 8 augmented vectors for pose, lighting, distance, and focused-object matching
-        // This expands each recorded sample into 9 embeddings for stronger small-object recall.
+        // Spawns 9 augmented vectors for pose, lighting, distance, and focused-object matching
+        // This expands each recorded sample into 10 embeddings for stronger small-object recall.
         this.augmentAndTrain(element, classId);
         
         this.updateNumClasses();
-        console.log(`[NeuralSight] Recorded sample and 8 augmented vectors for class '${className}' (ID: ${classId})`);
+        console.log(`[NeuralSight] Recorded sample and 9 augmented vectors for class '${className}' (ID: ${classId})`);
     },
 
     /**
@@ -691,8 +698,18 @@ const ClassifierEngine = {
         ctx.drawImage(element, tzx, tzy, tightZoomDim, tightZoomDim, 0, 0, 224, 224);
         ctx.restore();
         registerAugmented();
+
+        // Augmentation 8: Detail center zoom (small cases, earbuds, and logos)
+        ctx.clearRect(0, 0, 224, 224);
+        ctx.save();
+        const detailZoomDim = minDim * 0.38;
+        const dzx = sx + (minDim - detailZoomDim) / 2;
+        const dzy = sy + (minDim - detailZoomDim) / 2;
+        ctx.drawImage(element, dzx, dzy, detailZoomDim, detailZoomDim, 0, 0, 224, 224);
+        ctx.restore();
+        registerAugmented();
         
-        // Augmentation 8: Dimmer Lighting (Low-light variation invariance)
+        // Augmentation 9: Dimmer Lighting (Low-light variation invariance)
         ctx.clearRect(0, 0, 224, 224);
         ctx.save();
         ctx.filter = 'brightness(0.8) contrast(0.9)';
@@ -883,16 +900,22 @@ const ClassifierEngine = {
                     return;
                 }
 
+                const previousSimilarity = state.lastSimilarities[cropMatch.cropId];
                 const lift = cropMatch.similarity - previousBaseline;
+                const reentryLift = Number.isFinite(previousSimilarity)
+                    ? cropMatch.similarity - previousSimilarity
+                    : 0;
                 const isActiveMatch = cropMatch.similarity >= this.customStandardActivationFloor &&
-                                      lift >= this.customStandardActivationMargin;
+                                      (lift >= this.customStandardActivationMargin ||
+                                       reentryLift >= this.customStandardReentryMargin);
 
                 if (isActiveMatch) {
+                    const signalLift = Math.max(lift, reentryLift);
                     const confidence = Math.min(
                         0.99,
                         Math.max(
                             0.9,
-                            0.88 + lift * 4 + (cropMatch.similarity - this.customStandardActivationFloor) * 0.8
+                            0.88 + signalLift * 5 + (cropMatch.similarity - this.customStandardActivationFloor) * 0.7
                         )
                     );
 
@@ -906,14 +929,21 @@ const ClassifierEngine = {
                     }
                 }
 
-                // Let each crop baseline follow slowly so a held object does not
-                // instantly become background, while long-running scene changes recover.
-                const targetBaseline = isActiveMatch
-                    ? Math.min(cropMatch.similarity, previousBaseline + this.customStandardActivationMargin)
-                    : cropMatch.similarity;
+                let nextBaseline;
+                if (cropMatch.similarity < previousBaseline) {
+                    // If Standard mode opened while the object was still visible,
+                    // the first baseline is too high. Drop quickly once the object leaves.
+                    nextBaseline = previousBaseline * (1 - this.customStandardBaselineDownAlpha) +
+                        cropMatch.similarity * this.customStandardBaselineDownAlpha;
+                } else if (isActiveMatch) {
+                    // Do not let a currently visible trained object become background.
+                    nextBaseline = previousBaseline;
+                } else {
+                    nextBaseline = previousBaseline * (1 - this.customStandardBaselineAlpha) +
+                        cropMatch.similarity * this.customStandardBaselineAlpha;
+                }
 
-                state.baselines[cropMatch.cropId] = previousBaseline * (1 - this.customStandardBaselineAlpha) +
-                    targetBaseline * this.customStandardBaselineAlpha;
+                state.baselines[cropMatch.cropId] = nextBaseline;
                 state.lastSimilarities[cropMatch.cropId] = cropMatch.similarity;
             });
 
