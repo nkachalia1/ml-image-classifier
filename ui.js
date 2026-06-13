@@ -92,6 +92,10 @@ const UIManager = {
                 
                 this.activeTab = targetTab;
                 console.log(`[NeuralSight] Navigation changed to tab: ${targetTab}`);
+
+                if (targetTab === 'tab-standard' && window.ClassifierEngine) {
+                    ClassifierEngine.resetCustomStandardState();
+                }
                 
                 // Synchronize webcam element source when shifting to/from tabs
                 this.syncTabWebcams();
@@ -121,6 +125,9 @@ const UIManager = {
                 document.getElementById(`${source}-viewport`).classList.remove('hidden');
                 this.activeSource = source;
                 console.log(`[NeuralSight] Active source set to: ${source}`);
+                if (window.ClassifierEngine) {
+                    ClassifierEngine.resetCustomStandardState();
+                }
                 
                 // Reset predictions when switching sources
                 this.resetPredictionOutput();

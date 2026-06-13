@@ -215,7 +215,13 @@ const App = {
                 
                 try {
                     // 1. Run standard pre-trained MobileNet inference
-                    const predictions = await ClassifierEngine.predictStandard(elementToClassify);
+                    let predictions = await ClassifierEngine.predictStandard(elementToClassify);
+                    const customProposals = await ClassifierEngine.predictCustomForStandard(elementToClassify);
+
+                    if (customProposals.length > 0) {
+                        predictions = [...customProposals, ...predictions];
+                        predictions.sort((a, b) => b.probability - a.probability);
+                    }
                     
                     const latency = Math.round(performance.now() - startTime);
                     UIManager.drawPredictions(predictions, latency, elementToClassify);

@@ -35,6 +35,10 @@ const ClassifierEngine = {
     minCustomClassesForPrediction: 2,
     customUnknownSimilarityFloor: 0.985,
     customFullConfidenceSimilarity: 0.995,
+    customStandardActivationFloor: 0.988,
+    customStandardActivationMargin: 0.002,
+    customStandardBaselineAlpha: 0.04,
+    customStandardState: {},
     
     // UI Event listeners hooks
     onStatusChange: null,
@@ -417,6 +421,7 @@ const ClassifierEngine = {
         
         // Map class ID to its display name
         this.classNamesMap[classId] = className;
+        delete this.customStandardState[classId];
         
         // 1. Add Original Sample Vector
         const activation = this.getActivation(element);
@@ -520,7 +525,15 @@ const ClassifierEngine = {
      * @returns {Promise<Object>} Predicted class index, name, and full list of confidences
      */
     async predictCustom(element) {
-        if (!this.knnClassifierInstance || this.knnClassifierInstance.getNumClasses() < this.minCustomClassesForPrediction) {
+        return await this.predictCustomWithOptions(element, {
+            minClasses: this.minCustomClassesForPrediction
+        });
+    },
+
+    async predictCustomWithOptions(element, options = {}) {
+        const minClasses = options.minClasses || this.minCustomClassesForPrediction;
+
+        if (!this.knnClassifierInstance || this.knnClassifierInstance.getNumClasses() < minClasses) {
             return null;
         }
         
@@ -605,7 +618,8 @@ const ClassifierEngine = {
                 predictionsList.push({
                     classId: parseInt(id),
                     className: this.classNamesMap[id] || `Class ${id}`,
-                    probability: probability
+                    probability: probability,
+                    similarity: maxSimilarity
                 });
             }
             
@@ -623,6 +637,71 @@ const ClassifierEngine = {
         }
     },
 
+    async predictCustomForStandard(element) {
+        const result = await this.predictCustomWithOptions(element, { minClasses: 1 });
+        if (!result || !result.predictions) return [];
+
+        const proposals = [];
+        const usesLiveBaseline = element.tagName === 'VIDEO';
+
+        result.predictions.forEach(pred => {
+            const similarity = pred.similarity || 0;
+
+            if (!usesLiveBaseline) {
+                if (similarity >= this.customUnknownSimilarityFloor && pred.probability >= 0.75) {
+                    proposals.push({
+                        className: pred.className,
+                        probability: Math.min(0.98, Math.max(0.76, pred.probability)),
+                        isCustom: true
+                    });
+                }
+                return;
+            }
+
+            const state = this.customStandardState[pred.classId] || {
+                baseline: null,
+                lastSimilarity: 0
+            };
+
+            if (state.baseline === null || !Number.isFinite(state.baseline)) {
+                state.baseline = similarity;
+                state.lastSimilarity = similarity;
+                this.customStandardState[pred.classId] = state;
+                return;
+            }
+
+            const lift = similarity - state.baseline;
+            const isActiveMatch = similarity >= this.customStandardActivationFloor &&
+                                  lift >= this.customStandardActivationMargin;
+
+            if (isActiveMatch) {
+                const confidence = Math.min(0.98, Math.max(0.76, 0.76 + lift * 45));
+                proposals.push({
+                    className: pred.className,
+                    probability: confidence,
+                    isCustom: true
+                });
+
+                // Let the baseline follow slowly so a held object does not instantly
+                // become the new background, but long-running scene changes recover.
+                const cappedSimilarity = Math.min(similarity, state.baseline + this.customStandardActivationMargin);
+                state.baseline = state.baseline * (1 - this.customStandardBaselineAlpha) + cappedSimilarity * this.customStandardBaselineAlpha;
+            } else {
+                state.baseline = state.baseline * (1 - this.customStandardBaselineAlpha) + similarity * this.customStandardBaselineAlpha;
+            }
+
+            state.lastSimilarity = similarity;
+            this.customStandardState[pred.classId] = state;
+        });
+
+        proposals.sort((a, b) => b.probability - a.probability);
+        return proposals.slice(0, 2);
+    },
+
+    resetCustomStandardState() {
+        this.customStandardState = {};
+    },
+
     /**
      * Clear examples from a single custom class
      */
@@ -630,6 +709,7 @@ const ClassifierEngine = {
         if (this.knnClassifierInstance) {
             this.knnClassifierInstance.clearClass(classId);
             delete this.classNamesMap[classId];
+            delete this.customStandardState[classId];
             this.updateNumClasses();
             console.log(`[NeuralSight] Cleared all examples for class ID: ${classId}`);
         }
@@ -642,6 +722,7 @@ const ClassifierEngine = {
         if (this.knnClassifierInstance) {
             this.knnClassifierInstance.clearAllClasses();
             this.classNamesMap = {};
+            this.resetCustomStandardState();
             this.updateNumClasses();
             console.log('[NeuralSight] Reset custom transfer learning model.');
         }
@@ -708,6 +789,7 @@ const ClassifierEngine = {
         });
         
         this.knnClassifierInstance.setClassifierDataset(dataset);
+        this.resetCustomStandardState();
         this.updateNumClasses();
         console.log('[NeuralSight] Custom dataset imported successfully.');
     },
