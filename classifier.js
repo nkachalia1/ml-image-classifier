@@ -35,10 +35,13 @@ const ClassifierEngine = {
     minCustomClassesForPrediction: 2,
     customUnknownSimilarityFloor: 0.985,
     customFullConfidenceSimilarity: 0.995,
-    customStandardActivationFloor: 0.988,
-    customStandardActivationMargin: 0.002,
+    customStandardActivationFloor: 0.93,
+    customStandardStillFloor: 0.96,
+    customStandardActivationMargin: 0.018,
     customStandardBaselineAlpha: 0.04,
     customStandardState: {},
+    customScanCanvas: null,
+    customScanCtx: null,
     
     // UI Event listeners hooks
     onStatusChange: null,
@@ -414,6 +417,165 @@ const ClassifierEngine = {
         });
     },
 
+    getCustomScanCanvas() {
+        if (!this.customScanCanvas) {
+            this.customScanCanvas = document.createElement('canvas');
+            this.customScanCanvas.width = 224;
+            this.customScanCanvas.height = 224;
+            this.customScanCtx = this.customScanCanvas.getContext('2d');
+        }
+        return this.customScanCanvas;
+    },
+
+    getSourceDimensions(element) {
+        const width = element.videoWidth || element.naturalWidth || element.width || 0;
+        const height = element.videoHeight || element.naturalHeight || element.height || 0;
+
+        if (!width || !height) {
+            return null;
+        }
+
+        return { width, height };
+    },
+
+    buildCustomScanCrops(element) {
+        const dimensions = this.getSourceDimensions(element);
+        if (!dimensions) {
+            return [];
+        }
+
+        const { width, height } = dimensions;
+        const baseSize = Math.min(width, height);
+        const makeCrop = (id, ratio, centerX, centerY) => {
+            const size = Math.max(24, baseSize * ratio);
+            const maxX = Math.max(0, width - size);
+            const maxY = Math.max(0, height - size);
+            const sx = Math.min(Math.max(centerX * width - size / 2, 0), maxX);
+            const sy = Math.min(Math.max(centerY * height - size / 2, 0), maxY);
+
+            return {
+                id,
+                sx,
+                sy,
+                sw: Math.min(size, width),
+                sh: Math.min(size, height)
+            };
+        };
+
+        return [
+            makeCrop('full', 1.0, 0.5, 0.5),
+            makeCrop('center', 0.72, 0.5, 0.5),
+            makeCrop('center-tight', 0.48, 0.5, 0.5),
+            makeCrop('left', 0.62, 0.32, 0.5),
+            makeCrop('right', 0.62, 0.68, 0.5),
+            makeCrop('upper', 0.56, 0.5, 0.34),
+            makeCrop('lower', 0.56, 0.5, 0.66),
+            makeCrop('upper-left', 0.52, 0.33, 0.35),
+            makeCrop('upper-right', 0.52, 0.67, 0.35)
+        ];
+    },
+
+    getActivationVectorForCrop(element, crop) {
+        if (!this.isLoaded || !this.mobileNetModel) {
+            throw new Error('Classifier model not loaded');
+        }
+
+        const canvas = this.getCustomScanCanvas();
+        const ctx = this.customScanCtx;
+        ctx.clearRect(0, 0, 224, 224);
+        ctx.drawImage(element, crop.sx, crop.sy, crop.sw, crop.sh, 0, 0, 224, 224);
+
+        const values = tf.tidy(() => {
+            const tensor = tf.browser.fromPixels(canvas);
+            const normalized = tensor.toFloat().sub(tf.scalar(127.5)).div(tf.scalar(127.5));
+            const activation = this.mobileNetModel.infer(normalized, true);
+            return new Float32Array(activation.dataSync());
+        });
+
+        return {
+            cropId: crop.id,
+            values
+        };
+    },
+
+    calculateCustomSimilarities(queryVectors) {
+        const dataset = this.knnClassifierInstance.getClassifierDataset();
+        const similarities = {};
+
+        Object.keys(dataset).forEach(classId => {
+            const classTensor = dataset[classId];
+            if (!classTensor || !queryVectors.length) {
+                return;
+            }
+
+            const classValues = classTensor.dataSync();
+            const vectorLength = queryVectors[0].values.length;
+            const numExamples = classTensor.shape[0];
+            const cropMatches = [];
+
+            queryVectors.forEach(queryVector => {
+                const queryValues = queryVector.values;
+                let queryMean = 0;
+
+                for (let i = 0; i < vectorLength; i++) {
+                    queryMean += queryValues[i];
+                }
+                queryMean /= vectorLength;
+
+                const queryZeroMean = new Float32Array(vectorLength);
+                let queryNorm = 0;
+                for (let i = 0; i < vectorLength; i++) {
+                    queryZeroMean[i] = queryValues[i] - queryMean;
+                    queryNorm += queryZeroMean[i] * queryZeroMean[i];
+                }
+                queryNorm = Math.sqrt(queryNorm);
+
+                let maxSimilarity = 0;
+
+                for (let ex = 0; ex < numExamples; ex++) {
+                    const offset = ex * vectorLength;
+
+                    let exMean = 0;
+                    for (let i = 0; i < vectorLength; i++) {
+                        exMean += classValues[offset + i];
+                    }
+                    exMean /= vectorLength;
+
+                    let dotProduct = 0;
+                    let exNorm = 0;
+                    for (let i = 0; i < vectorLength; i++) {
+                        const valZeroMean = classValues[offset + i] - exMean;
+                        dotProduct += queryZeroMean[i] * valZeroMean;
+                        exNorm += valZeroMean * valZeroMean;
+                    }
+
+                    exNorm = Math.sqrt(exNorm);
+                    const similarity = (queryNorm && exNorm) ? (dotProduct / (queryNorm * exNorm)) : 0;
+                    if (similarity > maxSimilarity) {
+                        maxSimilarity = similarity;
+                    }
+                }
+
+                cropMatches.push({
+                    cropId: queryVector.cropId,
+                    similarity: maxSimilarity
+                });
+            });
+
+            cropMatches.sort((a, b) => b.similarity - a.similarity);
+
+            similarities[classId] = {
+                classId: parseInt(classId),
+                className: this.classNamesMap[classId] || `Class ${classId}`,
+                crops: cropMatches,
+                maxSimilarity: cropMatches[0] ? cropMatches[0].similarity : 0,
+                maxCropId: cropMatches[0] ? cropMatches[0].cropId : 'full'
+            };
+        });
+
+        return similarities;
+    },
+
     addCustomExample(element, classId, className) {
         if (!this.knnClassifierInstance) {
             throw new Error('KNN Classifier is not initialized');
@@ -429,16 +591,16 @@ const ClassifierEngine = {
         activation.dispose();
         
         // 2. Perform Mathematical Data Augmentation in-browser
-        // Spawns 4 augmented vectors (Flip, Rotate Left, Rotate Right, Brightness Shift)
-        // This expands training coverage 5x to create rotation, perspective and lighting invariance!
+        // Spawns 8 augmented vectors for pose, lighting, distance, and focused-object matching
+        // This expands each recorded sample into 9 embeddings for stronger small-object recall.
         this.augmentAndTrain(element, classId);
         
         this.updateNumClasses();
-        console.log(`[NeuralSight] Recorded sample and 6 augmented vectors for class '${className}' (ID: ${classId})`);
+        console.log(`[NeuralSight] Recorded sample and 8 augmented vectors for class '${className}' (ID: ${classId})`);
     },
 
     /**
-     * Creates 6 visual augmentations on offscreen canvas and registers them into the KNN classifier dataset
+     * Creates visual augmentations on offscreen canvas and registers them into the KNN classifier dataset
      */
     augmentAndTrain(element, classId) {
         const canvas = this.getOffscreenCanvas();
@@ -509,8 +671,28 @@ const ClassifierEngine = {
         ctx.drawImage(element, zsx, zsy, zoomDim, zoomDim, 0, 0, 224, 224);
         ctx.restore();
         registerAugmented();
+
+        // Augmentation 6: Strong center zoom (small object detail)
+        ctx.clearRect(0, 0, 224, 224);
+        ctx.save();
+        const focusedZoomDim = minDim * 0.65;
+        const fzx = sx + (minDim - focusedZoomDim) / 2;
+        const fzy = sy + (minDim - focusedZoomDim) / 2;
+        ctx.drawImage(element, fzx, fzy, focusedZoomDim, focusedZoomDim, 0, 0, 224, 224);
+        ctx.restore();
+        registerAugmented();
+
+        // Augmentation 7: Tight center zoom (earbuds, pens, and other small held objects)
+        ctx.clearRect(0, 0, 224, 224);
+        ctx.save();
+        const tightZoomDim = minDim * 0.5;
+        const tzx = sx + (minDim - tightZoomDim) / 2;
+        const tzy = sy + (minDim - tightZoomDim) / 2;
+        ctx.drawImage(element, tzx, tzy, tightZoomDim, tightZoomDim, 0, 0, 224, 224);
+        ctx.restore();
+        registerAugmented();
         
-        // Augmentation 6: Dimmer Lighting (Low-light variation invariance)
+        // Augmentation 8: Dimmer Lighting (Low-light variation invariance)
         ctx.clearRect(0, 0, 224, 224);
         ctx.save();
         ctx.filter = 'brightness(0.8) contrast(0.9)';
@@ -638,60 +820,108 @@ const ClassifierEngine = {
     },
 
     async predictCustomForStandard(element) {
-        const result = await this.predictCustomWithOptions(element, { minClasses: 1 });
-        if (!result || !result.predictions) return [];
+        if (!this.knnClassifierInstance || this.knnClassifierInstance.getNumClasses() < 1) {
+            return [];
+        }
+
+        const crops = this.buildCustomScanCrops(element);
+        if (!crops.length) {
+            return [];
+        }
+
+        let customMatches = [];
+        try {
+            const queryVectors = crops.map(crop => this.getActivationVectorForCrop(element, crop));
+            customMatches = Object.values(this.calculateCustomSimilarities(queryVectors));
+        } catch (error) {
+            console.warn('[NeuralSight] Custom standard scan skipped for this frame:', error);
+            return [];
+        }
 
         const proposals = [];
         const usesLiveBaseline = element.tagName === 'VIDEO';
 
-        result.predictions.forEach(pred => {
-            const similarity = pred.similarity || 0;
-
+        customMatches.forEach(match => {
             if (!usesLiveBaseline) {
-                if (similarity >= this.customUnknownSimilarityFloor && pred.probability >= 0.75) {
+                if (match.maxSimilarity >= this.customStandardStillFloor) {
+                    const confidence = Math.min(
+                        0.99,
+                        Math.max(0.86, 0.86 + (match.maxSimilarity - this.customStandardStillFloor) * 4)
+                    );
+
                     proposals.push({
-                        className: pred.className,
-                        probability: Math.min(0.98, Math.max(0.76, pred.probability)),
-                        isCustom: true
+                        className: match.className,
+                        probability: confidence,
+                        isCustom: true,
+                        customCropId: match.maxCropId
                     });
                 }
                 return;
             }
 
-            const state = this.customStandardState[pred.classId] || {
-                baseline: null,
-                lastSimilarity: 0
+            const state = this.customStandardState[match.classId] || {
+                baselines: {},
+                lastSimilarities: {}
             };
 
-            if (state.baseline === null || !Number.isFinite(state.baseline)) {
-                state.baseline = similarity;
-                state.lastSimilarity = similarity;
-                this.customStandardState[pred.classId] = state;
-                return;
+            // Migrate older state objects saved by previous app versions.
+            if (!state.baselines) {
+                state.baselines = {};
+            }
+            if (!state.lastSimilarities) {
+                state.lastSimilarities = {};
             }
 
-            const lift = similarity - state.baseline;
-            const isActiveMatch = similarity >= this.customStandardActivationFloor &&
-                                  lift >= this.customStandardActivationMargin;
+            let bestCandidate = null;
 
-            if (isActiveMatch) {
-                const confidence = Math.min(0.98, Math.max(0.76, 0.76 + lift * 45));
-                proposals.push({
-                    className: pred.className,
-                    probability: confidence,
-                    isCustom: true
-                });
+            match.crops.forEach(cropMatch => {
+                const previousBaseline = state.baselines[cropMatch.cropId];
 
-                // Let the baseline follow slowly so a held object does not instantly
-                // become the new background, but long-running scene changes recover.
-                const cappedSimilarity = Math.min(similarity, state.baseline + this.customStandardActivationMargin);
-                state.baseline = state.baseline * (1 - this.customStandardBaselineAlpha) + cappedSimilarity * this.customStandardBaselineAlpha;
-            } else {
-                state.baseline = state.baseline * (1 - this.customStandardBaselineAlpha) + similarity * this.customStandardBaselineAlpha;
+                if (!Number.isFinite(previousBaseline)) {
+                    state.baselines[cropMatch.cropId] = cropMatch.similarity;
+                    state.lastSimilarities[cropMatch.cropId] = cropMatch.similarity;
+                    return;
+                }
+
+                const lift = cropMatch.similarity - previousBaseline;
+                const isActiveMatch = cropMatch.similarity >= this.customStandardActivationFloor &&
+                                      lift >= this.customStandardActivationMargin;
+
+                if (isActiveMatch) {
+                    const confidence = Math.min(
+                        0.99,
+                        Math.max(
+                            0.9,
+                            0.88 + lift * 4 + (cropMatch.similarity - this.customStandardActivationFloor) * 0.8
+                        )
+                    );
+
+                    if (!bestCandidate || confidence > bestCandidate.probability) {
+                        bestCandidate = {
+                            className: match.className,
+                            probability: confidence,
+                            isCustom: true,
+                            customCropId: cropMatch.cropId
+                        };
+                    }
+                }
+
+                // Let each crop baseline follow slowly so a held object does not
+                // instantly become background, while long-running scene changes recover.
+                const targetBaseline = isActiveMatch
+                    ? Math.min(cropMatch.similarity, previousBaseline + this.customStandardActivationMargin)
+                    : cropMatch.similarity;
+
+                state.baselines[cropMatch.cropId] = previousBaseline * (1 - this.customStandardBaselineAlpha) +
+                    targetBaseline * this.customStandardBaselineAlpha;
+                state.lastSimilarities[cropMatch.cropId] = cropMatch.similarity;
+            });
+
+            if (bestCandidate) {
+                proposals.push(bestCandidate);
             }
 
-            state.lastSimilarity = similarity;
-            this.customStandardState[pred.classId] = state;
+            this.customStandardState[match.classId] = state;
         });
 
         proposals.sort((a, b) => b.probability - a.probability);
