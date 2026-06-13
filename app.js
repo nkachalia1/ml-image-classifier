@@ -215,29 +215,7 @@ const App = {
                 
                 try {
                     // 1. Run standard pre-trained MobileNet inference
-                    let predictions = await ClassifierEngine.predictStandard(elementToClassify);
-                    
-                    // 2. Query custom models only when they have enough contrast.
-                    if (ClassifierEngine.numClasses >= ClassifierEngine.minCustomClassesForPrediction) {
-                        const customResult = await ClassifierEngine.predictCustom(elementToClassify);
-                        if (customResult && customResult.predictions) {
-                            // Map custom categories to prediction models format with tag isCustom
-                            // Filter weak matches so custom labels do not stick to unrelated frames.
-                            const blendedCustom = customResult.predictions
-                                .filter(pred => pred.probability >= 0.75)
-                                .map(pred => ({
-                                    className: pred.className,
-                                    probability: pred.probability,
-                                    isCustom: true
-                                }));
-                            
-                            // Combine standard and custom arrays
-                            predictions = [...blendedCustom, ...predictions];
-                            
-                            // Re-sort blended output by probability scores descending
-                            predictions.sort((a, b) => b.probability - a.probability);
-                        }
-                    }
+                    const predictions = await ClassifierEngine.predictStandard(elementToClassify);
                     
                     const latency = Math.round(performance.now() - startTime);
                     UIManager.drawPredictions(predictions, latency, elementToClassify);
