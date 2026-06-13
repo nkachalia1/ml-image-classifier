@@ -12,6 +12,7 @@ This application uses GPU-accelerated WebGL bindings to perform high-speed stand
 
 1. **Pre-trained MobileNet Inference**
    - Classify images instantly from a live webcam feed, drag-and-drop file uploads, or a preloaded gallery.
+   - Uses a COCO-SSD person assist in MobileNet mode so live camera views of people resolve to `person` instead of nearby ImageNet object labels.
    - Beautiful, reactive HUD displaying top predictions with real-time confidence scores and system latency metrics.
 
 2. **In-Browser Custom Transfer Learning (KNN)**
@@ -69,7 +70,7 @@ Since the project operates as a static site powered by CDN dependencies, running
 ## 🧠 Behind the Machine Learning
 
 ### 1. Pre-trained Inference (MobileNet v2)
-MobileNet is a class of efficient convolutional neural networks designed for mobile and embedded vision applications. NeuralSight loads the MobileNet v2 model. When an image is supplied, it is squeezed down to a `224x224` tensor, normalized between `-1.0` and `1.0`, and convolved through layers to map against 1000 categories from the ImageNet database.
+MobileNet is a class of efficient convolutional neural networks designed for mobile and embedded vision applications. NeuralSight loads the MobileNet v2 model. When an image is supplied, it is squeezed down to a `224x224` tensor, normalized between `-1.0` and `1.0`, and convolved through layers to map against 1000 categories from the ImageNet database. Since ImageNet MobileNet does not include a generic `person` class, NeuralSight also runs a cached COCO-SSD person detector in MobileNet mode and promotes `person` when a human is detected in the frame.
 
 ### 2. Transfer Learning (KNN Classifier)
 Rather than retraining millions of network weights (which requires high-end servers), we use **Feature Extraction (Transfer Learning)**:

@@ -352,9 +352,10 @@ const UIManager = {
             return;
         }
         
-        // Draw COCO-SSD bounding box overlays
-        if (ClassifierEngine.activeModelId === 'cocossd' && elementToClassify) {
-            this.drawBoundingBoxes(predictions, elementToClassify);
+        // Draw object detector overlays for COCO-SSD mode and MobileNet person assist.
+        const overlayPredictions = predictions.filter(pred => pred.bbox);
+        if (overlayPredictions.length > 0 && elementToClassify) {
+            this.drawBoundingBoxes(overlayPredictions, elementToClassify);
         } else {
             this.clearAllOverlays();
         }
@@ -373,6 +374,10 @@ const UIManager = {
         if (topPred.isCustom) {
             topLabel.innerHTML += ` <span class="tag-custom-badge"><i class="fa-solid fa-graduation-cap"></i> Tagged</span>`;
         }
+
+        if (topPred.isDetectorAssist) {
+            topLabel.innerHTML += ` <span class="tag-detector-badge"><i class="fa-solid fa-user-check"></i> Person Assist</span>`;
+        }
         
         document.getElementById('top-pred-pct').textContent = `${topPct}%`;
         document.getElementById('top-pred-bar').style.width = `${topPct}%`;
@@ -386,12 +391,13 @@ const UIManager = {
             const pct = Math.round(pred.probability * 100);
             
             const customBadge = pred.isCustom ? ` <span class="tag-custom-badge"><i class="fa-solid fa-graduation-cap"></i> Tagged</span>` : '';
+            const detectorBadge = pred.isDetectorAssist ? ` <span class="tag-detector-badge"><i class="fa-solid fa-user-check"></i> Assist</span>` : '';
             
             const row = document.createElement('div');
             row.className = 'prediction-item';
             row.innerHTML = `
                 <div class="item-meta">
-                    <span class="item-label">${pred.className}${customBadge}</span>
+                    <span class="item-label">${pred.className}${customBadge}${detectorBadge}</span>
                     <span class="item-pct">${pct}%</span>
                 </div>
                 <div class="progress-bar-wrapper slim">

@@ -16,7 +16,16 @@ const ClassifierEngine = {
     activeModelId: 'mobilenet', // 'mobilenet', 'resnet', 'cocossd'
     resnetModel: null,
     cocoSsdModel: null,
+    cocoSsdLoadPromise: null,
     imagenetLabels: null,
+    personAssistUnavailable: false,
+    personAssistCache: {
+        timestamp: -Infinity,
+        element: null,
+        detections: []
+    },
+    personAssistIntervalMs: 650,
+    personAssistMinScore: 0.42,
     
     // Status
     isLoaded: false,
@@ -70,11 +79,17 @@ const ClassifierEngine = {
             
             this.isLoaded = true;
             console.log('[NeuralSight] MobileNet v2 model loaded successfully.');
-            this.updateStatus('model-status', 'online', 'MobileNet: Ready');
+            this.updateStatus('model-status', 'online', this.getMobileNetStatusLabel());
             
             if (this.onModelLoad) {
                 this.onModelLoad();
             }
+
+            // Start the human detector in the background so MobileNet can avoid
+            // ImageNet-only false positives such as "shower cap" for webcam users.
+            this.ensureCocoSsdModel({ silent: true }).catch(err => {
+                console.warn('[NeuralSight] Person assist unavailable; continuing with MobileNet only.', err);
+            });
         } catch (error) {
             console.error('[NeuralSight] Error during ML backend initialization:', error);
             this.updateStatus('tf-status', 'offline', 'TF.js: Init Failed');
@@ -110,7 +125,7 @@ const ClassifierEngine = {
             if (modelId === 'mobilenet') {
                 // Already loaded during startup init()
                 this.activeModelId = 'mobilenet';
-                this.updateStatus('model-status', 'online', 'MobileNet: Ready');
+                this.updateStatus('model-status', 'online', this.getMobileNetStatusLabel());
             } else if (modelId === 'resnet') {
                 if (!this.resnetModel) {
                     this.resnetModel = await tf.loadLayersModel('https://raw.githubusercontent.com/paulsp94/tfjs_resnet_imagenet/master/ResNet50/model.json');
@@ -118,9 +133,7 @@ const ClassifierEngine = {
                 this.activeModelId = 'resnet';
                 this.updateStatus('model-status', 'online', 'ResNet: Ready');
             } else if (modelId === 'cocossd') {
-                if (!this.cocoSsdModel) {
-                    this.cocoSsdModel = await cocoSsd.load();
-                }
+                await this.ensureCocoSsdModel({ silent: false });
                 this.activeModelId = 'cocossd';
                 this.updateStatus('model-status', 'online', 'COCO-SSD: Ready');
             }
@@ -130,6 +143,58 @@ const ClassifierEngine = {
             this.updateStatus('model-status', 'offline', `${targetLabel}: Load Failed`);
             throw error;
         }
+    },
+
+    getMobileNetStatusLabel() {
+        return this.cocoSsdModel ? 'MobileNet + Person: Ready' : 'MobileNet: Ready';
+    },
+
+    async ensureCocoSsdModel({ silent = false } = {}) {
+        if (this.cocoSsdModel) {
+            return this.cocoSsdModel;
+        }
+
+        if (this.personAssistUnavailable) {
+            return null;
+        }
+
+        if (!window.cocoSsd) {
+            this.personAssistUnavailable = true;
+            return null;
+        }
+
+        if (!this.cocoSsdLoadPromise) {
+            if (!silent && this.activeModelId === 'mobilenet') {
+                this.updateStatus('model-status', 'loading', 'MobileNet: Loading person assist...');
+            }
+
+            this.cocoSsdLoadPromise = cocoSsd.load()
+                .then(model => {
+                    this.cocoSsdModel = model;
+                    console.log('[NeuralSight] COCO-SSD person assist loaded for MobileNet mode.');
+
+                    if (this.activeModelId === 'mobilenet') {
+                        this.updateStatus('model-status', 'online', this.getMobileNetStatusLabel());
+                    }
+
+                    return model;
+                })
+                .catch(error => {
+                    this.personAssistUnavailable = true;
+                    console.error('[NeuralSight] Failed to load COCO-SSD person assist:', error);
+
+                    if (this.activeModelId === 'mobilenet') {
+                        this.updateStatus('model-status', 'online', 'MobileNet: Ready');
+                    }
+
+                    return null;
+                })
+                .finally(() => {
+                    this.cocoSsdLoadPromise = null;
+                });
+        }
+
+        return await this.cocoSsdLoadPromise;
     },
 
     /**
@@ -186,6 +251,8 @@ const ClassifierEngine = {
      * Run inference using COCO-SSD
      */
     async predictCocoSsd(element) {
+        await this.ensureCocoSsdModel({ silent: false });
+
         if (!this.cocoSsdModel) {
             throw new Error('COCO-SSD model is not loaded yet');
         }
@@ -204,7 +271,8 @@ const ClassifierEngine = {
         
         if (this.activeModelId === 'mobilenet') {
             if (!this.mobileNetModel) throw new Error('MobileNet model is not loaded yet');
-            return await this.mobileNetModel.classify(element, 3);
+            const mobileNetPredictions = await this.mobileNetModel.classify(element, 3);
+            return await this.applyPersonAssist(element, mobileNetPredictions);
         } else if (this.activeModelId === 'resnet') {
             return await this.predictResNet(element);
         } else if (this.activeModelId === 'cocossd') {
@@ -217,6 +285,65 @@ const ClassifierEngine = {
         }
         
         throw new Error(`Unsupported active model: ${this.activeModelId}`);
+    },
+
+    async applyPersonAssist(element, mobileNetPredictions) {
+        const detections = await this.getCachedObjectDetections(element);
+        const personDetections = detections
+            .filter(pred => pred.class === 'person' && pred.score >= this.personAssistMinScore)
+            .sort((a, b) => b.score - a.score);
+
+        if (personDetections.length === 0) {
+            return mobileNetPredictions;
+        }
+
+        const topPerson = personDetections[0];
+        const otherObjects = detections
+            .filter(pred => pred.class !== 'person' && pred.score >= 0.5)
+            .sort((a, b) => b.score - a.score);
+
+        const detectorPredictions = [
+            this.toDetectorPrediction(topPerson),
+            ...otherObjects.map(pred => this.toDetectorPrediction(pred))
+        ];
+
+        return detectorPredictions.slice(0, 3);
+    },
+
+    async getCachedObjectDetections(element) {
+        const now = performance.now();
+        const cacheAge = now - this.personAssistCache.timestamp;
+
+        if (this.personAssistCache.element === element && cacheAge < this.personAssistIntervalMs) {
+            return this.personAssistCache.detections;
+        }
+
+        const model = await this.ensureCocoSsdModel({ silent: true });
+        if (!model) {
+            return [];
+        }
+
+        try {
+            const detections = await model.detect(element);
+            this.personAssistCache = {
+                timestamp: performance.now(),
+                element,
+                detections
+            };
+            return detections;
+        } catch (error) {
+            console.warn('[NeuralSight] Person assist detection skipped for this frame:', error);
+            return this.personAssistCache.detections || [];
+        }
+    },
+
+    toDetectorPrediction(prediction) {
+        return {
+            className: prediction.class,
+            probability: prediction.score,
+            bbox: prediction.bbox,
+            isDetectorAssist: true
+        };
     },
 
     // Offscreen Canvas for persistent, clean pre-processing resizing
