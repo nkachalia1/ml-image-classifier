@@ -27,6 +27,10 @@ const UIManager = {
     customClasses: [], // Array of objects: { id, name, count, thumbnails: [] }
     recordingClassId: null,
     recordingInterval: null,
+    evaluationQueue: [],
+    evaluationResults: [],
+    evaluationSummary: null,
+    evaluationRunId: 0,
     
     // Image element for upload/preset sources
     activeImageElement: null,
@@ -56,6 +60,7 @@ const UIManager = {
         this.bindFileUploads();
         this.bindCustomClasses();
         this.bindAnalytics();
+        this.bindEvaluationLab();
         this.bindCaptioning();
         
         // Start memory diagnostic loop
@@ -706,6 +711,15 @@ const UIManager = {
             const prompt = document.getElementById('no-classes-prompt');
             if (prompt) prompt.classList.remove('hidden');
         }
+
+        this.evaluationQueue = this.evaluationQueue.filter(item => item.classId !== classId);
+        if (this.evaluationSummary) {
+            this.evaluationResults = [];
+            this.evaluationSummary = null;
+            this.renderEvaluationSummary(null);
+            this.renderConfusionMatrix(null);
+            this.renderEvaluationResultsTable([]);
+        }
         
         this.updateCustomToggles();
         console.log(`[NeuralSight] Deleted class ID: ${classId}`);
@@ -738,6 +752,8 @@ const UIManager = {
         } else {
             exportBtn.setAttribute('disabled', true);
         }
+
+        this.refreshEvaluationControls();
     },
 
     resetUIClassifier() {
@@ -754,6 +770,9 @@ const UIManager = {
         
         this.customClasses = [];
         this.classCounter = 0;
+        this.evaluationQueue = [];
+        this.evaluationResults = [];
+        this.evaluationSummary = null;
         
         // Reset score panels
         document.getElementById('custom-prediction-floating').textContent = 'Inactive';
@@ -761,6 +780,9 @@ const UIManager = {
         document.getElementById('custom-top-pct').textContent = '0%';
         document.getElementById('custom-top-bar').style.width = '0%';
         document.getElementById('custom-secondary-predictions').innerHTML = '';
+        this.renderEvaluationSummary(null);
+        this.renderConfusionMatrix(null);
+        this.renderEvaluationResultsTable([]);
         
         this.updateCustomToggles();
     },
@@ -1194,6 +1216,448 @@ const UIManager = {
         downloadLink.click();
         document.body.removeChild(downloadLink);
         console.log('[NeuralSight] Prediction logs exported to CSV.');
+    },
+
+    /**
+     * Custom model validation and confusion-matrix workflow
+     */
+    bindEvaluationLab() {
+        const select = document.getElementById('eval-class-select');
+        const fileInput = document.getElementById('eval-file-input');
+        const runBtn = document.getElementById('btn-run-eval');
+        const clearBtn = document.getElementById('btn-clear-eval');
+        const exportBtn = document.getElementById('btn-export-eval');
+
+        if (!select || !fileInput || !runBtn || !clearBtn || !exportBtn) return;
+
+        fileInput.addEventListener('change', () => {
+            const classId = parseInt(select.value, 10);
+            if (Number.isNaN(classId)) {
+                alert('Create or import custom classes before adding validation images.');
+                fileInput.value = '';
+                return;
+            }
+
+            this.queueEvaluationFiles(classId, Array.from(fileInput.files || []));
+            fileInput.value = '';
+        });
+
+        runBtn.addEventListener('click', () => {
+            this.runEvaluation();
+        });
+
+        clearBtn.addEventListener('click', () => {
+            this.clearEvaluationLab();
+        });
+
+        exportBtn.addEventListener('click', () => {
+            this.exportEvaluationCSV();
+        });
+
+        this.refreshEvaluationControls();
+    },
+
+    refreshEvaluationControls() {
+        const select = document.getElementById('eval-class-select');
+        const fileInput = document.getElementById('eval-file-input');
+        const uploadLabel = document.getElementById('eval-upload-label');
+        const runBtn = document.getElementById('btn-run-eval');
+        const clearBtn = document.getElementById('btn-clear-eval');
+        const exportBtn = document.getElementById('btn-export-eval');
+
+        if (!select || !fileInput || !uploadLabel || !runBtn || !clearBtn || !exportBtn) return;
+
+        const previousValue = select.value;
+        const trainedClasses = this.customClasses.filter(classObj => classObj.count > 0);
+        const classOptions = trainedClasses.map(classObj => (
+            `<option value="${classObj.id}">${this.escapeHTML(classObj.name)} (${classObj.count})</option>`
+        ));
+
+        if (classOptions.length === 0) {
+            select.innerHTML = '<option value="">Train classes first</option>';
+            select.disabled = true;
+            fileInput.disabled = true;
+            uploadLabel.classList.add('is-disabled');
+        } else {
+            select.innerHTML = classOptions.join('');
+            const hasPrevious = trainedClasses.some(classObj => String(classObj.id) === previousValue);
+            select.value = hasPrevious ? previousValue : String(trainedClasses[0].id);
+            select.disabled = false;
+            fileInput.disabled = false;
+            uploadLabel.classList.remove('is-disabled');
+        }
+
+        const hasRunnableModel = ClassifierEngine.numClasses >= 2;
+        const hasQueuedFiles = this.evaluationQueue.length > 0;
+        const hasAnyEvaluationState = hasQueuedFiles || this.evaluationResults.length > 0;
+
+        runBtn.disabled = !(hasRunnableModel && hasQueuedFiles);
+        clearBtn.disabled = !hasAnyEvaluationState;
+        exportBtn.disabled = this.evaluationResults.length === 0;
+
+        this.renderEvaluationQueue();
+    },
+
+    queueEvaluationFiles(classId, files) {
+        const classObj = this.customClasses.find(c => c.id === classId);
+        if (!classObj) return;
+
+        const imageFiles = files.filter(file => file.type.startsWith('image/'));
+        if (imageFiles.length === 0) {
+            alert('Validation currently accepts image files only.');
+            return;
+        }
+
+        const rejectedCount = files.length - imageFiles.length;
+        imageFiles.forEach((file, index) => {
+            this.evaluationQueue.push({
+                id: `${Date.now()}-${classId}-${index}-${file.name}`,
+                classId,
+                className: classObj.name,
+                fileName: file.name,
+                file
+            });
+        });
+
+        if (rejectedCount > 0) {
+            alert(`${rejectedCount} non-image file(s) were skipped.`);
+        }
+
+        this.refreshEvaluationControls();
+        console.log(`[NeuralSight] Queued ${imageFiles.length} validation image(s) for class '${classObj.name}'.`);
+    },
+
+    renderEvaluationQueue() {
+        const list = document.getElementById('eval-queue-list');
+        const queueCount = document.getElementById('eval-queue-count');
+        const queueStatus = document.getElementById('eval-queue-status');
+        if (!list || !queueCount || !queueStatus) return;
+
+        const total = this.evaluationQueue.length;
+        const totalLabel = `${total} test image${total === 1 ? '' : 's'}`;
+        queueCount.textContent = `${total} file${total === 1 ? '' : 's'}`;
+        queueStatus.textContent = `${totalLabel} queued`;
+
+        if (total === 0) {
+            list.innerHTML = '<div class="validation-empty-state">No holdout images queued.</div>';
+            return;
+        }
+
+        const grouped = new Map();
+        this.evaluationQueue.forEach(item => {
+            if (!grouped.has(item.classId)) {
+                grouped.set(item.classId, {
+                    className: item.className,
+                    files: []
+                });
+            }
+            grouped.get(item.classId).files.push(item.fileName);
+        });
+
+        list.innerHTML = Array.from(grouped.values()).map(group => {
+            const previewNames = group.files.slice(0, 3).map(name => this.escapeHTML(name)).join(', ');
+            const extra = group.files.length > 3 ? ` +${group.files.length - 3} more` : '';
+            return `
+                <div class="validation-queue-row">
+                    <div>
+                        <strong>${this.escapeHTML(group.className)}</strong>
+                        <div class="fps-counter">${previewNames}${extra}</div>
+                    </div>
+                    <span>${group.files.length} image${group.files.length === 1 ? '' : 's'}</span>
+                </div>
+            `;
+        }).join('');
+    },
+
+    clearEvaluationLab() {
+        this.evaluationQueue = [];
+        this.evaluationResults = [];
+        this.evaluationSummary = null;
+        this.renderEvaluationSummary(null);
+        this.renderConfusionMatrix(null);
+        this.renderEvaluationResultsTable([]);
+        this.refreshEvaluationControls();
+        console.log('[NeuralSight] Cleared validation queue and results.');
+    },
+
+    async runEvaluation() {
+        if (this.evaluationQueue.length === 0) {
+            alert('Add validation images before running the evaluation.');
+            return;
+        }
+
+        if (ClassifierEngine.numClasses < 2) {
+            alert('Train or import at least two custom classes before running validation.');
+            return;
+        }
+
+        const activeClassIds = new Set(this.customClasses.filter(classObj => classObj.count > 0).map(classObj => classObj.id));
+        const validQueue = this.evaluationQueue.filter(item => activeClassIds.has(item.classId));
+
+        if (validQueue.length === 0) {
+            alert('Queued validation images reference classes that no longer exist.');
+            this.evaluationQueue = [];
+            this.refreshEvaluationControls();
+            return;
+        }
+
+        if (validQueue.length !== this.evaluationQueue.length) {
+            this.evaluationQueue = validQueue;
+            this.refreshEvaluationControls();
+        }
+
+        const runId = ++this.evaluationRunId;
+        const classLookup = new Map(this.customClasses.map(classObj => [classObj.id, classObj.name]));
+        const classes = this.customClasses.map(classObj => ({ id: classObj.id, name: classObj.name }));
+        const matrix = {};
+        classes.forEach(expectedClass => {
+            matrix[expectedClass.id] = {};
+            classes.forEach(predictedClass => {
+                matrix[expectedClass.id][predictedClass.id] = 0;
+            });
+            matrix[expectedClass.id].unknown = 0;
+        });
+
+        const results = [];
+        let correct = 0;
+        let confidenceSum = 0;
+        let latencySum = 0;
+
+        this.showTrainingLoader('Validation Sweep', 'Scoring holdout images...');
+
+        try {
+            for (let i = 0; i < validQueue.length; i++) {
+                if (runId !== this.evaluationRunId) return;
+
+                const item = validQueue[i];
+                const progress = Math.round((i / validQueue.length) * 100);
+                this.updateTrainingLoader(progress, `Scoring ${i + 1}/${validQueue.length}: '${item.fileName}'`);
+
+                const expectedName = classLookup.get(item.classId) || item.className;
+                let predictedKey = 'unknown';
+                let predictedName = 'Unknown / Generic';
+                let confidence = 0;
+                let latency = 0;
+                let isCorrect = false;
+
+                try {
+                    const imageElement = await this.loadImageElementFromFile(item.file);
+                    const startTime = performance.now();
+                    const prediction = await ClassifierEngine.predictCustom(imageElement);
+                    latency = Math.round(performance.now() - startTime);
+
+                    if (prediction && prediction.classIndex >= 0 && classLookup.has(prediction.classIndex)) {
+                        predictedKey = prediction.classIndex;
+                        predictedName = classLookup.get(prediction.classIndex);
+                    }
+
+                    const topPrediction = prediction && prediction.predictions ? prediction.predictions[0] : null;
+                    confidence = topPrediction ? Math.round(Math.max(0, topPrediction.probability) * 100) : 0;
+                    isCorrect = predictedKey === item.classId;
+                } catch (error) {
+                    console.error('[NeuralSight] Validation item failed:', item.fileName, error);
+                }
+
+                matrix[item.classId][predictedKey] = (matrix[item.classId][predictedKey] || 0) + 1;
+                if (isCorrect) correct++;
+                confidenceSum += confidence;
+                latencySum += latency;
+
+                results.push({
+                    fileName: item.fileName,
+                    expectedClassName: expectedName,
+                    predictedClassName: predictedName,
+                    confidence,
+                    latency,
+                    isCorrect
+                });
+
+                await new Promise(resolve => requestAnimationFrame(resolve));
+            }
+
+            const total = results.length;
+            const testedClasses = new Set(validQueue.map(item => item.classId)).size;
+            this.evaluationResults = results;
+            this.evaluationSummary = {
+                runAt: new Date(),
+                classes,
+                matrix,
+                total,
+                correct,
+                testedClasses,
+                accuracy: total > 0 ? correct / total : 0,
+                avgConfidence: total > 0 ? confidenceSum / total : 0,
+                avgLatency: total > 0 ? Math.round(latencySum / total) : 0
+            };
+
+            this.updateTrainingLoader(100, 'Rendering validation report...');
+            this.renderEvaluationSummary(this.evaluationSummary);
+            this.renderConfusionMatrix(this.evaluationSummary);
+            this.renderEvaluationResultsTable(results);
+            this.refreshEvaluationControls();
+            console.log(`[NeuralSight] Validation completed. Accuracy: ${Math.round(this.evaluationSummary.accuracy * 100)}%`);
+        } finally {
+            this.hideTrainingLoader();
+        }
+    },
+
+    loadImageElementFromFile(file) {
+        return new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = (event) => {
+                const img = new Image();
+                img.onload = () => resolve(img);
+                img.onerror = reject;
+                img.src = event.target.result;
+            };
+            reader.onerror = reject;
+            reader.readAsDataURL(file);
+        });
+    },
+
+    renderEvaluationSummary(summary) {
+        const accuracy = document.getElementById('eval-stat-accuracy');
+        const correct = document.getElementById('eval-stat-correct');
+        const confidence = document.getElementById('eval-stat-confidence');
+        const classes = document.getElementById('eval-stat-classes');
+        const runLabel = document.getElementById('eval-run-label');
+
+        if (!accuracy || !correct || !confidence || !classes || !runLabel) return;
+
+        if (!summary) {
+            accuracy.textContent = '0%';
+            correct.textContent = '0 / 0';
+            confidence.textContent = '0%';
+            classes.textContent = '0';
+            runLabel.textContent = 'No run yet';
+            return;
+        }
+
+        accuracy.textContent = `${Math.round(summary.accuracy * 100)}%`;
+        correct.textContent = `${summary.correct} / ${summary.total}`;
+        confidence.textContent = `${Math.round(summary.avgConfidence)}%`;
+        classes.textContent = `${summary.testedClasses}`;
+        runLabel.textContent = summary.runAt.toLocaleTimeString();
+    },
+
+    renderConfusionMatrix(summary) {
+        const container = document.getElementById('eval-confusion-matrix');
+        if (!container) return;
+
+        if (!summary || summary.total === 0) {
+            container.innerHTML = '<div class="validation-empty-state">Run validation to populate class outcomes.</div>';
+            return;
+        }
+
+        const columns = [...summary.classes, { id: 'unknown', name: 'Unknown' }];
+        const headerCells = columns.map(column => `<th>${this.escapeHTML(column.name)}</th>`).join('');
+        const rows = summary.classes.map(expectedClass => {
+            const cells = columns.map(column => {
+                const count = summary.matrix[expectedClass.id][column.id] || 0;
+                let cellClass = '';
+                if (count > 0 && column.id === expectedClass.id) {
+                    cellClass = 'matrix-hit';
+                } else if (count > 0 && column.id === 'unknown') {
+                    cellClass = 'matrix-unknown';
+                } else if (count > 0) {
+                    cellClass = 'matrix-miss';
+                }
+                return `<td class="${cellClass}">${count}</td>`;
+            }).join('');
+
+            return `
+                <tr>
+                    <th class="matrix-row-label">${this.escapeHTML(expectedClass.name)}</th>
+                    ${cells}
+                </tr>
+            `;
+        }).join('');
+
+        container.innerHTML = `
+            <table class="confusion-matrix">
+                <thead>
+                    <tr>
+                        <th>Expected \\ Predicted</th>
+                        ${headerCells}
+                    </tr>
+                </thead>
+                <tbody>${rows}</tbody>
+            </table>
+        `;
+    },
+
+    renderEvaluationResultsTable(results) {
+        const body = document.getElementById('eval-results-body');
+        if (!body) return;
+
+        if (!results || results.length === 0) {
+            body.innerHTML = `
+                <tr class="table-empty-row">
+                    <td colspan="5">No validation run completed yet.</td>
+                </tr>
+            `;
+            return;
+        }
+
+        body.innerHTML = results.map(result => `
+            <tr>
+                <td>${this.escapeHTML(result.fileName)}</td>
+                <td><span class="text-glow-cyan">${this.escapeHTML(result.expectedClassName)}</span></td>
+                <td><span class="text-glow-purple">${this.escapeHTML(result.predictedClassName)}</span></td>
+                <td>${result.confidence}%</td>
+                <td><span class="result-badge ${result.isCorrect ? 'pass' : 'fail'}">${result.isCorrect ? 'Pass' : 'Review'}</span></td>
+            </tr>
+        `).join('');
+    },
+
+    exportEvaluationCSV() {
+        if (!this.evaluationResults || this.evaluationResults.length === 0) {
+            alert('Run validation before exporting an evaluation report.');
+            return;
+        }
+
+        const rows = [
+            ['File', 'Expected Class', 'Predicted Class', 'Confidence (%)', 'Latency (ms)', 'Result']
+        ];
+
+        this.evaluationResults.forEach(result => {
+            rows.push([
+                result.fileName,
+                result.expectedClassName,
+                result.predictedClassName,
+                String(result.confidence),
+                String(result.latency),
+                result.isCorrect ? 'Pass' : 'Review'
+            ]);
+        });
+
+        const csvContent = rows
+            .map(row => row.map(value => this.escapeCSV(value)).join(','))
+            .join('\n');
+        const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+        const url = URL.createObjectURL(blob);
+
+        const downloadLink = document.createElement('a');
+        downloadLink.href = url;
+        downloadLink.download = `NeuralSight_Validation_Report_${Date.now()}.csv`;
+        document.body.appendChild(downloadLink);
+        downloadLink.click();
+        document.body.removeChild(downloadLink);
+        URL.revokeObjectURL(url);
+        console.log('[NeuralSight] Validation report exported to CSV.');
+    },
+
+    escapeHTML(value) {
+        return String(value)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#039;');
+    },
+
+    escapeCSV(value) {
+        return `"${String(value).replace(/"/g, '""')}"`;
     },
 
     updateMemoryDiagnostics() {

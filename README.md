@@ -27,7 +27,12 @@ This application uses GPU-accelerated WebGL bindings to perform high-speed stand
      - **Pixel Grid**: Maps the discrete input resolution cells.
    - Real-time RGB Color Distribution Histogram mapping.
 
-4. **Analytics & Performance Tracker**
+4. **Custom Model Validation Lab**
+   - Queue labeled holdout images against your trained custom classes.
+   - Run an in-browser evaluation pass to measure accuracy, average confidence, and per-image outcomes.
+   - Inspect a confusion matrix to spot class overlap and export validation reports as CSV.
+
+5. **Analytics & Performance Tracker**
    - Chart history table tracking past predictions.
    - Interactive system latency monitor showcasing inference latency in milliseconds over time.
    - Export historical telemetry outputs directly to a CSV file.

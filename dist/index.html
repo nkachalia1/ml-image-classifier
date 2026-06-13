@@ -15,7 +15,7 @@
     <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Outfit:wght@300;400;600;800&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     
-    <!-- Custom Style Sheet -->
+    <!-- Custom Style Sheet -->
     
     <!-- TensorFlow.js Library Stack (MANDATORY CDNs) -->
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.17.0/dist/tf.min.js"></script>
@@ -25,8 +25,8 @@
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.3/dist/coco-ssd.min.js"></script>
     <!-- Transformers.js CDN for in-browser Local AI Image Captioning -->
     <script src="https://cdn.jsdelivr.net/npm/@xenova/transformers@2.17.2/dist/transformers.min.js"></script>
-  <script type="module" crossorigin src="/assets/index-CFcSltFH.js"></script>
-  <link rel="stylesheet" crossorigin href="/assets/index-CLnklf5u.css">
+  <script type="module" crossorigin src="/ml-image-classifier/assets/index-XeN7uyh7.js"></script>
+  <link rel="stylesheet" crossorigin href="/ml-image-classifier/assets/index-BHLZL9Da.css">
 </head>
 <body>
     <div class="glow-backdrop"></div>
@@ -405,6 +405,96 @@
                             </div>
                         </div>
                     </div>
+
+                    <!-- Full-width: Custom Model Evaluation -->
+                    <div class="panel glass-card flex-col validation-panel grid-span-2">
+                        <div class="panel-header">
+                            <h2 class="panel-title"><i class="fa-solid fa-clipboard-check icon-cyan"></i>Validation Lab</h2>
+                            <span class="fps-counter" id="eval-queue-status">0 test images queued</span>
+                        </div>
+
+                        <div class="validation-toolbar">
+                            <div class="validation-control">
+                                <label class="control-label" for="eval-class-select">Expected Class</label>
+                                <select id="eval-class-select" class="neural-select" disabled>
+                                    <option value="">Train classes first</option>
+                                </select>
+                            </div>
+                            <label for="eval-file-input" class="btn btn-secondary cursor-pointer" id="eval-upload-label">
+                                <i class="fa-solid fa-image"></i> Add Test Images
+                            </label>
+                            <input type="file" id="eval-file-input" accept="image/*" multiple class="hidden">
+                            <button class="btn btn-primary" id="btn-run-eval" disabled>
+                                <i class="fa-solid fa-play"></i> Run Validation
+                            </button>
+                            <button class="btn btn-secondary" id="btn-export-eval" disabled>
+                                <i class="fa-solid fa-file-csv"></i> Export Report
+                            </button>
+                            <button class="btn btn-danger" id="btn-clear-eval" disabled>
+                                <i class="fa-solid fa-xmark"></i> Clear
+                            </button>
+                        </div>
+
+                        <div class="validation-summary-grid">
+                            <div class="stat-box">
+                                <span class="stat-label">Accuracy</span>
+                                <span class="stat-number text-glow-cyan" id="eval-stat-accuracy">0%</span>
+                            </div>
+                            <div class="stat-box">
+                                <span class="stat-label">Correct</span>
+                                <span class="stat-number text-glow-purple" id="eval-stat-correct">0 / 0</span>
+                            </div>
+                            <div class="stat-box">
+                                <span class="stat-label">Avg Confidence</span>
+                                <span class="stat-number text-glow-magenta" id="eval-stat-confidence">0%</span>
+                            </div>
+                            <div class="stat-box">
+                                <span class="stat-label">Classes Tested</span>
+                                <span class="stat-number text-glow-yellow" id="eval-stat-classes">0</span>
+                            </div>
+                        </div>
+
+                        <div class="validation-layout">
+                            <div class="validation-section">
+                                <div class="validation-section-header">
+                                    <span>Evaluation Queue</span>
+                                    <span id="eval-queue-count">0 files</span>
+                                </div>
+                                <div class="validation-queue-list" id="eval-queue-list">
+                                    <div class="validation-empty-state">No holdout images queued.</div>
+                                </div>
+                            </div>
+
+                            <div class="validation-section">
+                                <div class="validation-section-header">
+                                    <span>Confusion Matrix</span>
+                                    <span id="eval-run-label">No run yet</span>
+                                </div>
+                                <div class="confusion-matrix-wrapper" id="eval-confusion-matrix">
+                                    <div class="validation-empty-state">Run validation to populate class outcomes.</div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="table-container validation-results-table">
+                            <table class="logs-table">
+                                <thead>
+                                    <tr>
+                                        <th>File</th>
+                                        <th>Expected</th>
+                                        <th>Predicted</th>
+                                        <th>Confidence</th>
+                                        <th>Result</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="eval-results-body">
+                                    <tr class="table-empty-row">
+                                        <td colspan="5">No validation run completed yet.</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
                 </div>
             </section>
 
@@ -625,6 +715,6 @@
         </div>
     </div>
 
-    <!-- Script Orchestration -->
+    <!-- Script Orchestration -->
 </body>
 </html>
