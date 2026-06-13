@@ -77,7 +77,7 @@ Rather than retraining millions of network weights (which requires high-end serv
 - We pass your input feed through MobileNet, but stop at the final pre-classification activation layer.
 - This returns a dense **1280-dimensional feature vector** representing highly optimized features (shapes, curves, textures) detected by the network.
 - When you click "Record Example", we save this vector and automatically generate **6 augmented vectors** (incorporating horizontal mirroring, rotations, brightness shifts, scale zoom/crop, and low-light variations) to enforce robust visual invariance.
-- During custom prediction, we pass the webcam frame through MobileNet to extract its vector, and run a **k-Nearest Neighbors (KNN)** classification with a dynamically adjusted value of `k` based on dataset size for optimal robustness. It maps the vector to the closest clustering class and outputs confidence probabilities!
+- During custom prediction, we pass the webcam frame through MobileNet to extract its vector, and run a **k-Nearest Neighbors (KNN)** classification with a dynamically adjusted value of `k` based on dataset size for optimal robustness. Custom labels require at least two trained classes and a high similarity score before they blend into standard inference, which prevents a single uploaded label from sticking to unrelated camera frames.
 
 ### 3. Edge Detection Matrix Math (Sobel Filter)
 In the X-Ray tab, Sobel Edge Detection is implemented via canvas pixel math:

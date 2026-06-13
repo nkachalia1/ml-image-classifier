@@ -217,14 +217,14 @@ const App = {
                     // 1. Run standard pre-trained MobileNet inference
                     let predictions = await ClassifierEngine.predictStandard(elementToClassify);
                     
-                    // 2. Query custom models if trained categories exist
-                    if (ClassifierEngine.numClasses > 0) {
+                    // 2. Query custom models only when they have enough contrast.
+                    if (ClassifierEngine.numClasses >= ClassifierEngine.minCustomClassesForPrediction) {
                         const customResult = await ClassifierEngine.predictCustom(elementToClassify);
                         if (customResult && customResult.predictions) {
                             // Map custom categories to prediction models format with tag isCustom
-                            // Filter out predictions where probability is 0 (image does not resemble class)
+                            // Filter weak matches so custom labels do not stick to unrelated frames.
                             const blendedCustom = customResult.predictions
-                                .filter(pred => pred.probability > 0)
+                                .filter(pred => pred.probability >= 0.75)
                                 .map(pred => ({
                                     className: pred.className,
                                     probability: pred.probability,

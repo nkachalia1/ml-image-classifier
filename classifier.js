@@ -32,6 +32,9 @@ const ClassifierEngine = {
     backend: 'cpu',
     numClasses: 0,
     classNamesMap: {}, // Maps numeric index to string labels
+    minCustomClassesForPrediction: 2,
+    customUnknownSimilarityFloor: 0.985,
+    customFullConfidenceSimilarity: 0.995,
     
     // UI Event listeners hooks
     onStatusChange: null,
@@ -517,7 +520,7 @@ const ClassifierEngine = {
      * @returns {Promise<Object>} Predicted class index, name, and full list of confidences
      */
     async predictCustom(element) {
-        if (!this.knnClassifierInstance || this.knnClassifierInstance.getNumClasses() === 0) {
+        if (!this.knnClassifierInstance || this.knnClassifierInstance.getNumClasses() < this.minCustomClassesForPrediction) {
             return null;
         }
         
@@ -587,16 +590,15 @@ const ClassifierEngine = {
                     }
                 }
                 
-                // SOFT THRESHOLDING SIMILARITY SCALE:
-                // Cosine similarity < 0.975 is treated as completely unrelated (zeroed out).
-                // Cosine similarity >= 0.990 is treated as fully resembled (full confidence).
-                // In between, we smoothly interpolate. This prevents sudden overlaps.
+                // Soft thresholding similarity scale:
+                // Lower similarities are treated as unrelated to prevent a trained
+                // class from sticking to unrelated webcam frames.
                 let probability = confidences[id];
-                if (maxSimilarity < 0.975) {
+                if (maxSimilarity < this.customUnknownSimilarityFloor) {
                     probability = 0.0;
-                } else if (maxSimilarity < 0.990) {
+                } else if (maxSimilarity < this.customFullConfidenceSimilarity) {
                     // Smooth linear interpolation multiplier
-                    const scale = (maxSimilarity - 0.975) / (0.990 - 0.975);
+                    const scale = (maxSimilarity - this.customUnknownSimilarityFloor) / (this.customFullConfidenceSimilarity - this.customUnknownSimilarityFloor);
                     probability = confidences[id] * scale;
                 }
                 
